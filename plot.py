@@ -31,5 +31,7 @@ if __name__ == "__main__":
 
     else:
         y = load(args.filenames[0])
-        print(y.shape) 
- 
+        plt.imshow(y)
+        plt.colorbar()
+        plt.show()
+

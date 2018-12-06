@@ -2,58 +2,12 @@
 #include <iomanip>
 #include <fstream>
 #include <cmath>
-#include <map>
+#include "app_utils.hpp"
 #include "ndarray.hpp"
 #include "visit_struct.hpp"
 #include "ufunc.hpp"
 #include "physics.hpp"
 
-
-
-
-// ============================================================================
-template<typename Writeable>
-void tofile(const Writeable& writeable, const std::string& fname)
-{
-    std::ofstream outfile(fname, std::ofstream::binary | std::ios::out);
-
-    if (! outfile.is_open())
-    {
-        throw std::invalid_argument("file " + fname + " could not be opened for writing");
-    }
-    auto s = writeable.dumps();
-    outfile.write(s.data(), s.size());
-    outfile.close();
-}
-
-
-
-
-// ============================================================================
-template <class T, std::size_t N>
-std::ostream& operator<<(std::ostream& o, const std::array<T, N>& arr)
-{
-    std::copy(arr.cbegin(), arr.cend(), std::ostream_iterator<T>(o, " "));
-    return o;
-}
-
-
-
-
-// ============================================================================
-class Timer
-{
-public:
-    Timer() : instantiated(std::clock())
-    {
-    }
-    double seconds() const
-    {
-        return double (std::clock() - instantiated) / CLOCKS_PER_SEC;
-    }
-private:
-    std::clock_t instantiated;
-};
 
 
 
@@ -121,7 +75,19 @@ struct shocktube_2d
 {
     inline std::array<double, 5> operator()(std::array<double, 2> x) const
     {
-        return x[0] + x[1] < 0.5
+        return x[0] + x[1] < 1.0 + 1e-10
+        ? std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.000}
+        : std::array<double, 5>{0.1, 0.0, 0.0, 0.0, 0.125};
+    }
+};
+
+struct cylindrical_explosion
+{
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    {
+        auto x = X[0] - 0.5;
+        auto y = X[1] - 0.5;
+        return x * x + y * y < 0.05
         ? std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.000}
         : std::array<double, 5>{0.1, 0.0, 0.0, 0.0, 0.125};
     }
@@ -135,7 +101,6 @@ struct gaussian
         return std::array<double, 5>{d, 0.0, 0.0, 0.0, 1.000};
     }
 };
-
 
 
 
@@ -204,6 +169,8 @@ private:
 };
 
 
+
+
 // ============================================================================
 class Database2
 {
@@ -249,14 +216,12 @@ public:
         auto shape = std::array<int, 3>{ni + 2 * guard, nj + 2 * guard, 5};
         auto res   = nd::array<double, 3>(shape);
 
-        res.select(_, _, 0) = 1.0;
+        res.select(_, _, 0) = 0.1;
         res.select(_, _, 1) = 0.0;
         res.select(_, _, 2) = 0.0;
         res.select(_, _, 3) = 0.0;
-        res.select(_, _, 4) = 1.0;
+        res.select(_, _, 4) = 0.125;
         res.select(_|guard|ni+guard, _|guard|nj+guard, _) = data;
-
-        std::cout << "WARNING: no BC in 2D" << std::endl;
 
         return res;
     }
@@ -269,65 +234,19 @@ private:
 
 
 // ============================================================================
-namespace cmdline 
-{
-    std::map<std::string, std::string> parse_keyval(int argc, const char* argv[])
-    {
-        std::map<std::string, std::string> items;
-
-        for (int n = 0; n < argc; ++n)
-        {
-            std::string arg = argv[n];
-            std::string::size_type eq_index = arg.find('=');
-
-            if (eq_index != std::string::npos)
-            {
-                std::string key = arg.substr (0, eq_index);
-                std::string val = arg.substr (eq_index + 1);
-                items[key] = val;
-            }
-        }
-        return items;
-    }
-
-    template <typename T>
-    void set_from_string(std::string source, T& value);
-
-    template <>
-    void set_from_string<std::string>(std::string source, std::string& value)
-    {
-        value = source;
-    }
-
-    template <>
-    void set_from_string<int>(std::string source, int& value)
-    {
-        value = std::stoi(source);
-    }
-
-    template <>
-    void set_from_string<double>(std::string source, double& value)
-    {
-        value = std::stod(source);
-    }
-}
-
-
-
-
-// ============================================================================
 struct run_config
 {
     std::string outdir = ".";
     double tfinal = 1.0;
-
+    int ni = 100;
+    int nj = 100;
 
     void print(std::ostream& os) const;
     static run_config from_dict(std::map<std::string, std::string> items);
     static run_config from_argv(int argc, const char* argv[]);
 };
 
-VISITABLE_STRUCT(run_config, outdir, tfinal);
+VISITABLE_STRUCT(run_config, outdir, tfinal, ni, nj);
 
 
 
@@ -421,7 +340,7 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
         double fri = arg[2];
         double flj = arg[3];
         double frj = arg[4];
-        return u - (fri - fli) * dt / dx - (frj - flj) * dt / dy;
+        return u + (fri - fli) * dt / dx + (frj - flj) * dt / dy;
     };
 
     auto gradient_est = ufunc::from(gradient_plm(1.5));
@@ -436,25 +355,33 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
     auto mj = U0.shape(1);
     auto P0 = cons_to_prim(U0);
 
-    auto Pai = P0.take<0>(_|0|mi-2);
-    auto Pbi = P0.take<0>(_|1|mi-1);
-    auto Pci = P0.take<0>(_|2|mi-0);
-    auto Gbi = gradient_est(Pai, Pbi, Pci);
-    auto Pli = extrap_l(Pbi, Gbi);
-    auto Pri = extrap_r(Pbi, Gbi);
-    auto Fhi = godunov_flux_i(Pri.take<0>(_|0|mi-3), Pli.take<0>(_|1|mi-2));
+    auto Fhi = [&] ()
+    {
+        auto Pai = P0.select(_|0|mi-2, _|2|mj-2, _);
+        auto Pbi = P0.select(_|1|mi-1, _|2|mj-2, _);
+        auto Pci = P0.select(_|2|mi-0, _|2|mj-2, _);
+        auto Gbi = gradient_est(Pai, Pbi, Pci);
+        auto Pli = extrap_l(Pbi, Gbi);
+        auto Pri = extrap_r(Pbi, Gbi);
+        auto Fhi = godunov_flux_i(Pri.take<0>(_|0|mi-3), Pli.take<0>(_|1|mi-2));
+        return Fhi;
+    }();
 
-    auto Paj = P0.take<1>(_|0|mj-2);
-    auto Pbj = P0.take<1>(_|1|mj-1);
-    auto Pcj = P0.take<1>(_|2|mj-0);
-    auto Gbj = gradient_est(Paj, Pbj, Pcj);
-    auto Plj = extrap_l(Pbj, Gbj);
-    auto Prj = extrap_r(Pbj, Gbj);
-    auto Fhj = godunov_flux_j(Prj.take<1>(_|0|mj-3), Plj.take<1>(_|1|mj-2));
+    auto Fhj = [&] ()
+    {
+        auto Paj = P0.select(_|2|mi-2, _|0|mj-2, _);
+        auto Pbj = P0.select(_|2|mi-2, _|1|mj-1, _);
+        auto Pcj = P0.select(_|2|mi-2, _|2|mj-0, _);
+        auto Gbj = gradient_est(Paj, Pbj, Pcj);
+        auto Plj = extrap_l(Pbj, Gbj);
+        auto Prj = extrap_r(Pbj, Gbj);
+        auto Fhj = godunov_flux_j(Prj.take<1>(_|0|mj-3), Plj.take<1>(_|1|mj-2));
+        return Fhj;
+    }();
 
     auto U1 = advance_cons(
         std::array<nd::array<double, 3>, 5>{
-            U0 .take<0>(_|2|mi-2),
+            U0 .select(_|2|mi-2, _|2|mj-2, _),
             Fhi.take<0>(_|1|mi-3),
             Fhi.take<0>(_|0|mi-4),
             Fhj.take<1>(_|1|mj-3),
@@ -493,7 +420,7 @@ int main_1d(int argc, const char* argv[])
 
     auto _ = nd::axis::all();
     auto wall = 0.0;
-    auto ni   = 1600;
+    auto ni   = cfg.ni;
     auto iter = 0;
     auto t    = 0.0;
     auto dx   = 1.0 / ni;
@@ -513,8 +440,8 @@ int main_1d(int argc, const char* argv[])
     {
         auto timer = Timer();
 
-        // database.commit(advance_2d(database.checkout(2), dt, dx), 0.0);
-        // database.commit(advance_2d(database.checkout(2), dt, dx), 0.5);
+        database.commit(advance_1d(database.checkout(2), dt, dx), 0.0);
+        database.commit(advance_1d(database.checkout(2), dt, dx), 0.5);
 
         t    += dt;
         iter += 1;
@@ -536,22 +463,22 @@ int main_1d(int argc, const char* argv[])
 
 
 // ============================================================================
-int main(int argc, const char* argv[])
+int main_2d(int argc, const char* argv[])
 {
     auto cfg = run_config::from_argv(argc, argv);
     cfg.print(std::cout);
 
     auto _ = nd::axis::all();
     auto wall = 0.0;
-    auto ni   = 100;
-    auto nj   = 100;
+    auto ni   = cfg.ni;
+    auto nj   = cfg.nj;
     auto iter = 0;
     auto t    = 0.0;
     auto dx   = 1.0 / ni;
     auto dy   = 1.0 / nj;
-    auto dt   = dx * 0.125;
+    auto dt   = std::min(dx, dy) * 0.125 / 2;
 
-    auto initial_data = ufunc::vfrom(shocktube_2d());
+    auto initial_data = ufunc::vfrom(cylindrical_explosion());
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
 
     auto x_verts = mesh_vertices(ni, nj);
@@ -574,10 +501,10 @@ int main(int argc, const char* argv[])
         iter += 1;
         wall += timer.seconds();
 
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni / 1e3 / timer.seconds());
+        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni * nj / 1e3 / timer.seconds());
     }
 
-    std::printf("average kzps=%f\n", ni / 1e3 / wall * iter);
+    std::printf("average kzps=%f\n", ni * nj / 1e3 / wall * iter);
 
     auto P = prim_to_cons(database.checkout());
 
@@ -586,4 +513,14 @@ int main(int argc, const char* argv[])
     tofile(P.select(_, _, 0), "rho.nd");
 
     return 0;
+}
+
+
+
+
+// ============================================================================
+int main(int argc, const char* argv[])
+{
+    std::set_terminate (terminate_with_backtrace);
+    return main_2d(argc, argv);
 }
