@@ -1,0 +1,6 @@
+[submodule "third_party/visit_struct"]
+	path = third_party/visit_struct
+	url = https://github.com/cbeck88/visit_struct.git
+[submodule "third_party/ndarray"]
+	path = third_party/ndarray
+	url = https://github.com/jzrake/ndarray.git

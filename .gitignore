@@ -1,0 +1,7 @@
+*.nd
+*.h5
+*.o
+bt
+Makefile.in
+src/visit_struct.hpp
+src/ndarray.hpp
