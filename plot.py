@@ -18,15 +18,18 @@ def load(filename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("filename", nargs='+')
-
+    parser.add_argument("filenames", nargs='+')
     args = parser.parse_args()
-    x = load(args.filename[0])
 
     import matplotlib.pyplot as plt
 
-    for fname in args.filename[1:]:
-        y = load(fname)
+    if len(args.filenames) == 2:
+        x = load(args.filenames[0])
+        y = load(args.filenames[1])
         plt.plot(x, y, '-o', mfc='none')
+        plt.show()
 
-    plt.show()
+    else:
+        y = load(args.filenames[0])
+        print(y.shape) 
+ 

@@ -1,6 +1,6 @@
 -include Makefile.in
 
-CXXFLAGS = -std=c++14 -Wall -Wextra -Wno-missing-braces -O2
+CXXFLAGS = -std=c++14 -Wall -Wextra -Wno-missing-braces -O3
 
 THIRD_P = src/visit_struct.hpp src/ndarray.hpp
 HEADERS = $(filter-out $(THIRD_P), $(wildcard src/*.hpp))

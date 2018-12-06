@@ -130,9 +130,10 @@ struct newtonian_hydro::prim_to_eval
 // ============================================================================
 struct newtonian_hydro::riemann_hlle
 {
+    riemann_hlle(Unit nhat) : nhat(nhat) {}
+
     inline Vars operator()(Vars Pl, Vars Pr) const
     {
-        auto nhat = std::array<double, 3>{1, 0, 0};
         auto Ul = p2c(Pl);
         auto Ur = p2c(Pr);
         auto Al = p2a(Pl, nhat);
@@ -156,6 +157,7 @@ struct newtonian_hydro::riemann_hlle
         }
         return F;
     }
+    Unit nhat;
     prim_to_cons p2c;
     prim_to_eval p2a;
     prim_to_flux p2f;

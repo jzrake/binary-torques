@@ -57,6 +57,7 @@ namespace ufunc {
         template <typename, typename> struct Ufunc1;
         template <typename, typename> struct Ufunc2;
         template <typename, typename> struct Ufunc3;
+        template <typename Callable, typename T, std::size_t Arity> struct Ufuncn;
 
         template <typename, typename, std::size_t, std::size_t> struct Vfunc1;
         template <typename, typename, std::size_t, std::size_t, std::size_t> struct Vfunc2;
@@ -66,6 +67,7 @@ namespace ufunc {
     template<typename Callable> auto from(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 1>::type* = nullptr);
     template<typename Callable> auto from(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 2>::type* = nullptr);
     template<typename Callable> auto from(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 3>::type* = nullptr);
+    template<typename Callable> auto nfrom(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 1>::type* = nullptr);
 
     template<typename Callable> auto vfrom(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 1>::type* = nullptr);
     template<typename Callable> auto vfrom(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 2>::type* = nullptr);
@@ -154,6 +156,50 @@ struct ufunc::detail::Ufunc3
         while (r != R.end())
         {
             *r++ = F(*a++, *b++, *c++);
+        }
+        return R;
+    }
+    Callable F;
+};
+
+
+
+
+// ============================================================================
+template <typename Callable, typename T, std::size_t Arity>
+struct ufunc::detail::Ufuncn
+{
+    Ufuncn(Callable F) : F(F) {}
+
+    template <int Rank>
+    inline auto operator()(const std::array<nd::array<T, Rank>, Arity>& args) const
+    {
+        for (std::size_t n = 0; n < Arity - 1; ++n)
+        {
+            if (args[n].shape() != args[n + 1].shape())
+            {
+                throw std::invalid_argument("input arrays have different shapes");
+            }            
+        }
+
+        auto R = nd::array<T, Rank>(args[0].shape());
+        auto r = R.begin();
+        auto iters = std::array<typename nd::array<T, Rank>::const_iterator, Arity>();
+
+        for (std::size_t n = 0; n < Arity; ++n)
+        {
+            iters[n] = args[n].begin();
+        }
+
+        while (r != R.end())
+        {
+            auto a = std::array<T, Arity>();
+
+            for (std::size_t n = 0; n < Arity; ++n)
+            {
+                a[n] = *iters[n]++;
+            }
+            *r++ = F(a);
         }
         return R;
     }
@@ -303,6 +349,13 @@ template<typename Callable>
 auto ufunc::from(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 3>::type*)
 {
     return detail::Ufunc3<Callable, double>(f);
+}
+
+template<typename Callable>
+auto ufunc::nfrom(Callable f, typename std::enable_if<detail::function_traits<Callable>::arity == 1>::type*)
+{
+    constexpr std::size_t ArgSize = typename detail::function_traits<Callable>::template arg<0>::type().size();
+    return detail::Ufuncn<Callable, double, ArgSize>(f);
 }
 
 template<typename Callable>
