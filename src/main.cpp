@@ -106,85 +106,27 @@ struct gaussian
 
 
 // ============================================================================
-class Database
-{
-
-public:
-    Database(int ni) : data(ni, 5)
-    {
-    }
-
-    /**
-     * Merge the given data into the database with the given weighting factor.
-     * Setting rk_factor=0.0 corresponds to overwriting the existing data.
-     */
-    void commit(nd::array<double, 2> new_data, double rk_factor=0.0)
-    {
-        auto average = ufunc::from([c=rk_factor] (double a, double b)
-        {
-            return a * (1 - c) + b * c;
-        });
-
-        // The only reason to check if rk_factor is zero for performance. The
-        // outcome would be the same.
-
-        if (rk_factor == 0.0)
-        {
-            data = new_data;
-        }
-        else
-        {
-            data = average(new_data, data);            
-        }
-    }
-
-    /**
-     * Return a copy of the current data, padded with the given number of
-     * guard zones.
-     */
-    nd::array<double, 2> checkout(int guard=0) const
-    {
-        auto _ = nd::axis::all();
-        auto ni    = data.shape(0);
-        auto shape = std::array<int, 2>{ni + 2 * guard, 5};
-        auto res   = nd::array<double, 2>(shape);
-
-        res.select(_|guard|ni+guard, _) = data;
-
-        // Temporarily we're using a zero-gradient BC:
-
-        for (int i = 0; i < guard; ++i)
-        {
-            for (int q = 0; q < 5; ++q)
-            {
-                res(i, q) = data(0, q);
-                res(i + ni + guard, q) = data(ni - 1, q);
-            }
-        }
-        return res;
-    }
-
-private:
-    nd::array<double, 2> data;
-};
-
-
-
-
-// ============================================================================
 class Database2
 {
 
 public:
+    using Index = std::tuple<int, int, int>;
+    using Array = nd::array<double, 3>;
+
     Database2(int ni, int nj) : data(ni, nj, 5)
     {
+    }
+
+    void insert(Index index, Array data)
+    {
+        commit(index, data);
     }
 
     /**
      * Merge the given data into the database with the given weighting factor.
      * Setting rk_factor=0.0 corresponds to overwriting the existing data.
      */
-    void commit(nd::array<double, 3> new_data, double rk_factor=0.0)
+    void commit(Index, nd::array<double, 3> new_data, double rk_factor=0.0)
     {
         auto average = ufunc::from([c=rk_factor] (double a, double b)
         {
@@ -208,7 +150,7 @@ public:
      * Return a copy of the current data, padded with the given number of
      * guard zones.
      */
-    nd::array<double, 3> checkout(int guard=0) const
+    nd::array<double, 3> checkout(Index, int guard=0) const
     {
         auto _ = nd::axis::all();
         auto ni    = data.shape(0);
@@ -229,6 +171,127 @@ public:
 private:
     nd::array<double, 3> data;
 };
+
+
+
+
+// ============================================================================
+enum class Field
+{
+    cell_centers,
+    conserved,
+};
+
+
+
+
+// ============================================================================
+class DatabaseFMR
+{
+
+public:
+    using Index = std::tuple<int, int, Field>;
+    using Array = nd::array<double, 3>;
+
+    DatabaseFMR(int ni, int nj, std::map<Field, int> field_size)
+    : ni(ni)
+    , nj(nj)
+    , field_size(field_size)
+    {
+    }
+
+    /**
+     * Insert a deep copy of the given array into the database at the given
+     * patch index. Any existing data at that location is overwritten.
+     */
+    void insert(Index index, Array data)
+    {
+        patches[index].become(check_shape(data, index).copy());
+    }
+
+    /**
+     * Erase any patch data at the given index.
+     */
+    auto erase(Index index)
+    {
+        return patches.erase(index);
+    }
+
+    /**
+     * Merge the given data into the database at the given index, with the
+     * given weighting factor. Setting rk_factor=0.0 corresponds to
+     * overwriting the existing data.
+     *
+     * An exception is throws if a patch does not already exist at the given patch
+     * index. Use insert to create a new patch.
+     */
+    void commit(Index index, Array data, double rk_factor=0.0)
+    {
+        auto target = patches.at(index);
+
+        if (rk_factor == 0.0)
+        {
+            target = data;
+        }
+        else
+        {
+            auto average = ufunc::from([c=rk_factor] (double a, double b)
+            {
+                return a * (1 - c) + b * c;
+            });
+            target = average(data, target);            
+        }
+    }
+
+    /**
+     * Return a deep copy of the data at the patch index, padded with the
+     * given number of guard zones. If no data exists at that index, or the
+     * data has the wrong size, an exception is thrown.
+     */
+    Array checkout(Index index, int guard=0) const
+    {
+        auto _ = nd::axis::all();
+        auto shape = std::array<int, 3>{ni + 2 * guard, nj + 2 * guard, 5};
+        auto res   = nd::array<double, 3>(shape);
+        auto data  = patches.at(index);
+
+        res.select(_, _, 0) = 0.1;
+        res.select(_, _, 1) = 0.0;
+        res.select(_, _, 2) = 0.0;
+        res.select(_, _, 3) = 0.0;
+        res.select(_, _, 4) = 0.125;
+        res.select(_|guard|ni+guard, _|guard|nj+guard, _) = data;
+
+        return res;
+    }
+
+    auto begin() const
+    {
+        return patches.begin();
+    }
+
+    auto end() const
+    {
+        return patches.end();
+    }
+
+private:
+    Array check_shape(Array& array, Index index) const
+    {
+        auto which = std::get<2>(index);
+
+        if (array.shape() != std::array<int, 3>{ni, nj, field_size.at(which)})
+        {
+            throw std::invalid_argument("input patch data has the wrong shape");
+        }
+        return array;
+    }
+    int ni;
+    int nj;
+    std::map<Field, int> field_size;
+    std::map<Index, Array> patches;
+};
+
 
 
 
@@ -295,38 +358,6 @@ void run_config::print(std::ostream& os) const
 
 
 
-// ============================================================================
-auto advance_1d(nd::array<double, 2> U0, double dt, double dx)
-{
-    auto _ = nd::axis::all();
-
-    auto gradient_est = ufunc::from(gradient_plm(1.5));
-    auto advance_cons = ufunc::from(add_diff_scaled(-dt / dx));
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
-    auto godunov_flux = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
-    auto extrap_l = ufunc::from(add_scaled(-0.5));
-    auto extrap_r = ufunc::from(add_scaled(+0.5));
-
-    auto mi = U0.shape(0);
-    auto P0 = cons_to_prim(U0);
-
-    auto Pa = P0.take<0>(_|0|mi-2);
-    auto Pb = P0.take<0>(_|1|mi-1);
-    auto Pc = P0.take<0>(_|2|mi-0);
-    auto Gb = gradient_est(Pa, Pb, Pc);
-    auto Pl = extrap_l(Pb, Gb);
-    auto Pr = extrap_r(Pb, Gb);
-    auto Fh = godunov_flux(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
-    auto U1 = advance_cons(
-        U0.take<0>(_|2|mi-2),
-        Fh.take<0>(_|1|mi-3),
-        Fh.take<0>(_|0|mi-4));
-
-    return U1;
-}
-
-
-
 
 // ============================================================================
 auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
@@ -357,26 +388,26 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
 
     auto Fhi = [&] ()
     {
-        auto Pai = P0.select(_|0|mi-2, _|2|mj-2, _);
-        auto Pbi = P0.select(_|1|mi-1, _|2|mj-2, _);
-        auto Pci = P0.select(_|2|mi-0, _|2|mj-2, _);
-        auto Gbi = gradient_est(Pai, Pbi, Pci);
-        auto Pli = extrap_l(Pbi, Gbi);
-        auto Pri = extrap_r(Pbi, Gbi);
-        auto Fhi = godunov_flux_i(Pri.take<0>(_|0|mi-3), Pli.take<0>(_|1|mi-2));
-        return Fhi;
+        auto Pa = P0.select(_|0|mi-2, _|2|mj-2, _);
+        auto Pb = P0.select(_|1|mi-1, _|2|mj-2, _);
+        auto Pc = P0.select(_|2|mi-0, _|2|mj-2, _);
+        auto Gb = gradient_est(Pa, Pb, Pc);
+        auto Pl = extrap_l(Pb, Gb);
+        auto Pr = extrap_r(Pb, Gb);
+        auto Fh = godunov_flux_i(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
+        return Fh;
     }();
 
     auto Fhj = [&] ()
     {
-        auto Paj = P0.select(_|2|mi-2, _|0|mj-2, _);
-        auto Pbj = P0.select(_|2|mi-2, _|1|mj-1, _);
-        auto Pcj = P0.select(_|2|mi-2, _|2|mj-0, _);
-        auto Gbj = gradient_est(Paj, Pbj, Pcj);
-        auto Plj = extrap_l(Pbj, Gbj);
-        auto Prj = extrap_r(Pbj, Gbj);
-        auto Fhj = godunov_flux_j(Prj.take<1>(_|0|mj-3), Plj.take<1>(_|1|mj-2));
-        return Fhj;
+        auto Pa = P0.select(_|2|mi-2, _|0|mj-2, _);
+        auto Pb = P0.select(_|2|mi-2, _|1|mj-1, _);
+        auto Pc = P0.select(_|2|mi-2, _|2|mj-0, _);
+        auto Gb = gradient_est(Pa, Pb, Pc);
+        auto Pl = extrap_l(Pb, Gb);
+        auto Pr = extrap_r(Pb, Gb);
+        auto Fh = godunov_flux_j(Pr.take<1>(_|0|mj-3), Pl.take<1>(_|1|mj-2));
+        return Fh;
     }();
 
     auto U1 = advance_cons(
@@ -394,7 +425,10 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
 
 
 // ============================================================================
-nd::array<double, 3> mesh_vertices(int ni, int nj)
+nd::array<double, 3> mesh_vertices(
+    int ni, int nj,
+    double x0=0.0, double x1=1.0,
+    double y0=0.0, double y1=1.0)
 {
     auto X = nd::array<double, 3>(ni + 1, nj + 1, 2);
 
@@ -402,61 +436,24 @@ nd::array<double, 3> mesh_vertices(int ni, int nj)
     {
         for (int j = 0; j < nj + 1; ++j)
         {
-            X(i, j, 0) = double(i) / ni;
-            X(i, j, 1) = double(j) / nj;
+            X(i, j, 0) = x0 + (x1 - x0) * i / ni;
+            X(i, j, 1) = y0 + (y1 - y0) * j / nj;
         }
     }
     return X;
 }
 
-
-
-
-// ============================================================================
-int main_1d(int argc, const char* argv[])
+nd::array<double, 3> mesh_cell_centers(nd::array<double, 3> verts)
 {
-    auto cfg = run_config::from_argv(argc, argv);
-    cfg.print(std::cout);
-
     auto _ = nd::axis::all();
-    auto wall = 0.0;
-    auto ni   = cfg.ni;
-    auto iter = 0;
-    auto t    = 0.0;
-    auto dx   = 1.0 / ni;
-    auto dt   = dx * 0.125;
+    auto ni = verts.shape(0) - 1;
+    auto nj = verts.shape(1) - 1;
 
-    auto initial_data = ufunc::vfrom(shocktube());
-    auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
-
-    auto x_verts = nd::linspace<double>(0.0, 1.0, ni+1).reshape(ni+1, 1);
-    auto x_cells = (x_verts.take<0>(_|1|ni+1) + x_verts.take<0>(_|0|ni)) * 0.5;
-    auto x_delta = (x_verts.take<0>(_|1|ni+1) - x_verts.take<0>(_|0|ni)) * 1.0;
-
-    auto database = Database(ni);
-    database.commit(prim_to_cons(initial_data(x_cells)));
-
-    while (t < cfg.tfinal)
-    {
-        auto timer = Timer();
-
-        database.commit(advance_1d(database.checkout(2), dt, dx), 0.0);
-        database.commit(advance_1d(database.checkout(2), dt, dx), 0.5);
-
-        t    += dt;
-        iter += 1;
-        wall += timer.seconds();
-
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni / 1e3 / timer.seconds());
-    }
-
-    std::printf("average kzps=%f\n", ni / 1e3 / wall * iter);
-
-    auto P = prim_to_cons(database.checkout());
-    tofile(x_cells.select(_, 0), "x_cells.nd");
-    tofile(P.select(_, 0), "rho.nd");
-
-    return 0;
+    return (
+    verts.select(_|0|ni+0, _|0|nj+0, _) +
+    verts.select(_|0|ni+0, _|1|nj+1, _) +
+    verts.select(_|1|ni+1, _|0|nj+0, _) +
+    verts.select(_|1|ni+1, _|1|nj+1, _)) * 0.25;
 }
 
 
@@ -476,26 +473,44 @@ int main_2d(int argc, const char* argv[])
     auto t    = 0.0;
     auto dx   = 1.0 / ni;
     auto dy   = 1.0 / nj;
-    auto dt   = std::min(dx, dy) * 0.125 / 2;
+    auto dt   = std::min(dx, dy) * 0.125;
+
+    auto field_size = std::map<Field, int> {
+        {Field::conserved, 5},
+        {Field::cell_centers, 2},
+    };
 
     auto initial_data = ufunc::vfrom(cylindrical_explosion());
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
+    auto database = DatabaseFMR(ni, nj, field_size);
 
-    auto x_verts = mesh_vertices(ni, nj);
-    auto x_cells = (x_verts.select(_|0|ni+0, _|0|nj+0, _) +
-                    x_verts.select(_|0|ni+0, _|1|nj+1, _) +
-                    x_verts.select(_|1|ni+1, _|0|nj+0, _) +
-                    x_verts.select(_|1|ni+1, _|1|nj+1, _)) * 0.25;
+    for (int i = 0; i < 2; ++i)
+    {
+        for (int j = 0; j < 2; ++j)
+        {
+            double x0 = (i + 0) * 0.5;
+            double x1 = (i + 1) * 0.5;
+            double y0 = (j + 0) * 0.5;
+            double y1 = (j + 1) * 0.5;
 
-    auto database = Database2(ni, nj);
-    database.commit(prim_to_cons(initial_data(x_cells)));
+            auto x_verts = mesh_vertices(ni, nj, x0, x1, y0, y1);
+            auto x_cells = mesh_cell_centers(x_verts);
+            auto P = prim_to_cons(initial_data(x_cells));
+
+            database.insert(std::make_tuple(i, j, Field::cell_centers), x_cells);
+            database.insert(std::make_tuple(i, j, Field::conserved), P);
+        }
+    }
+
+
 
     while (t < cfg.tfinal)
     {
         auto timer = Timer();
+        auto index = std::make_tuple(0, 0, Field::conserved);
 
-        database.commit(advance_2d(database.checkout(2), dt, dx, dy), 0.0);
-        database.commit(advance_2d(database.checkout(2), dt, dx, dy), 0.5);
+        database.commit(index, advance_2d(database.checkout(index, 2), dt, dx, dy), 0.0);
+        database.commit(index, advance_2d(database.checkout(index, 2), dt, dx, dy), 0.5);
 
         t    += dt;
         iter += 1;
@@ -506,11 +521,17 @@ int main_2d(int argc, const char* argv[])
 
     std::printf("average kzps=%f\n", ni * nj / 1e3 / wall * iter);
 
-    auto P = prim_to_cons(database.checkout());
 
-    tofile(x_verts, "verts.nd");
-    tofile(x_cells, "cells.nd");
-    tofile(P.select(_, _, 0), "rho.nd");
+    for (const auto& patch : database)
+    {
+        if (std::get<2>(patch.first) == Field::conserved)
+        {
+            auto P = prim_to_cons(patch.second);
+            auto addr = std::to_string(std::get<0>(patch.first)) + "-" + std::to_string(std::get<1>(patch.first));
+
+            tofile(P.select(_, _, 0), "rho_" + addr + ".nd");
+        }
+    }
 
     return 0;
 }
@@ -524,3 +545,152 @@ int main(int argc, const char* argv[])
     std::set_terminate (terminate_with_backtrace);
     return main_2d(argc, argv);
 }
+
+
+
+
+// ============================================================================
+// class Database
+// {
+
+// public:
+//     Database(int ni) : data(ni, 5)
+//     {
+//     }
+
+//     /**
+//      * Merge the given data into the database with the given weighting factor.
+//      * Setting rk_factor=0.0 corresponds to overwriting the existing data.
+//      */
+//     void commit(nd::array<double, 2> new_data, double rk_factor=0.0)
+//     {
+//         auto average = ufunc::from([c=rk_factor] (double a, double b)
+//         {
+//             return a * (1 - c) + b * c;
+//         });
+
+//         // The only reason to check if rk_factor is zero for performance. The
+//         // outcome would be the same.
+
+//         if (rk_factor == 0.0)
+//         {
+//             data = new_data;
+//         }
+//         else
+//         {
+//             data = average(new_data, data);            
+//         }
+//     }
+
+//     /**
+//      * Return a copy of the current data, padded with the given number of
+//      * guard zones.
+//      */
+//     nd::array<double, 2> checkout(int guard=0) const
+//     {
+//         auto _ = nd::axis::all();
+//         auto ni    = data.shape(0);
+//         auto shape = std::array<int, 2>{ni + 2 * guard, 5};
+//         auto res   = nd::array<double, 2>(shape);
+
+//         res.select(_|guard|ni+guard, _) = data;
+
+//         // Temporarily we're using a zero-gradient BC:
+
+//         for (int i = 0; i < guard; ++i)
+//         {
+//             for (int q = 0; q < 5; ++q)
+//             {
+//                 res(i, q) = data(0, q);
+//                 res(i + ni + guard, q) = data(ni - 1, q);
+//             }
+//         }
+//         return res;
+//     }
+
+// private:
+//     nd::array<double, 2> data;
+// };
+
+
+
+
+// ============================================================================
+// auto advance_1d(nd::array<double, 2> U0, double dt, double dx)
+// {
+//     auto _ = nd::axis::all();
+
+//     auto gradient_est = ufunc::from(gradient_plm(1.5));
+//     auto advance_cons = ufunc::from(add_diff_scaled(-dt / dx));
+//     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
+//     auto godunov_flux = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
+//     auto extrap_l = ufunc::from(add_scaled(-0.5));
+//     auto extrap_r = ufunc::from(add_scaled(+0.5));
+
+//     auto mi = U0.shape(0);
+//     auto P0 = cons_to_prim(U0);
+
+//     auto Pa = P0.take<0>(_|0|mi-2);
+//     auto Pb = P0.take<0>(_|1|mi-1);
+//     auto Pc = P0.take<0>(_|2|mi-0);
+//     auto Gb = gradient_est(Pa, Pb, Pc);
+//     auto Pl = extrap_l(Pb, Gb);
+//     auto Pr = extrap_r(Pb, Gb);
+//     auto Fh = godunov_flux(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
+//     auto U1 = advance_cons(
+//         U0.take<0>(_|2|mi-2),
+//         Fh.take<0>(_|1|mi-3),
+//         Fh.take<0>(_|0|mi-4));
+
+//     return U1;
+// }
+
+
+
+
+// ============================================================================
+// int main_1d(int argc, const char* argv[])
+// {
+//     auto cfg = run_config::from_argv(argc, argv);
+//     cfg.print(std::cout);
+
+//     auto _ = nd::axis::all();
+//     auto wall = 0.0;
+//     auto ni   = cfg.ni;
+//     auto iter = 0;
+//     auto t    = 0.0;
+//     auto dx   = 1.0 / ni;
+//     auto dt   = dx * 0.125;
+
+//     auto initial_data = ufunc::vfrom(shocktube());
+//     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
+
+//     auto x_verts = nd::linspace<double>(0.0, 1.0, ni+1).reshape(ni+1, 1);
+//     auto x_cells = (x_verts.take<0>(_|1|ni+1) + x_verts.take<0>(_|0|ni)) * 0.5;
+//     auto x_delta = (x_verts.take<0>(_|1|ni+1) - x_verts.take<0>(_|0|ni)) * 1.0;
+
+//     auto database = Database(ni);
+//     database.commit(prim_to_cons(initial_data(x_cells)));
+
+//     while (t < cfg.tfinal)
+//     {
+//         auto timer = Timer();
+
+//         database.commit(advance_1d(database.checkout(2), dt, dx), 0.0);
+//         database.commit(advance_1d(database.checkout(2), dt, dx), 0.5);
+
+//         t    += dt;
+//         iter += 1;
+//         wall += timer.seconds();
+
+//         std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni / 1e3 / timer.seconds());
+//     }
+
+//     std::printf("average kzps=%f\n", ni / 1e3 / wall * iter);
+
+//     auto P = prim_to_cons(database.checkout());
+//     tofile(x_cells.select(_, 0), "x_cells.nd");
+//     tofile(P.select(_, 0), "rho.nd");
+
+//     return 0;
+// }
