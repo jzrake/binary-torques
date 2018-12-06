@@ -4,15 +4,15 @@ CXXFLAGS = -std=c++14 -Wall -Wextra -Wno-missing-braces -O3
 
 THIRD_P = src/visit_struct.hpp src/ndarray.hpp
 HEADERS = $(filter-out $(THIRD_P), $(wildcard src/*.hpp))
-SOURCES = src/main.cpp
-OBJECTS = src/main.o
+SOURCES = $(wildcard src/*.cpp)
+OBJECTS = $(SOURCES:.cpp=.o)
 
 default: bt
-
 src/main.o: $(HEADERS) $(THIRD_P)
+src/app_utils.o: src/app_utils.hpp
 
-bt: src/main.o
-	$(CXX) -o $@ $<
+bt: $(OBJECTS)
+	$(CXX) -o $@ $^
 
 src/visit_struct.hpp: third_party/visit_struct/include/visit_struct/visit_struct.hpp
 	cp $< $@

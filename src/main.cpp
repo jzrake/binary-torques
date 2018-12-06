@@ -260,8 +260,55 @@ public:
         res.select(_, _, 2) = 0.0;
         res.select(_, _, 3) = 0.0;
         res.select(_, _, 4) = 0.125;
-        res.select(_|guard|ni+guard, _|guard|nj+guard, _) = data;
+        res.select(_|guard|ni+guard, _|guard|nj+guard, _) = patches.at(index);
 
+        auto i = std::get<0>(index);
+        auto j = std::get<1>(index);
+        auto f = std::get<2>(index);
+
+        auto Ri = std::make_tuple(i + 1, j, f);
+        auto Li = std::make_tuple(i - 1, j, f);
+        auto Rj = std::make_tuple(i, j + 1, f);
+        auto Lj = std::make_tuple(i, j - 1, f);
+
+        if (patches.count(Ri))
+        {
+            auto S = patches.at(Ri);
+            res.select(_|ni+guard|ni+2*guard, _|guard|nj+guard, _) = S.select(_|0|guard, _, _);
+        }
+
+        if (patches.count(Rj))
+        {
+            auto S = patches.at(Rj);
+            res.select(_|guard|ni+guard, _|nj+guard|nj+2*guard, _) = S.select(_, _|0|guard, _);
+        }
+
+        if (patches.count(Li))
+        {
+            auto S = patches.at(Li);
+            res.select(_|0|guard, _|guard|nj+guard, _) = S.select(_|ni-guard|ni, _, _);
+        }
+
+        if (patches.count(Lj))
+        {
+            auto S = patches.at(Lj);
+            res.select(_|guard|ni+guard, _|0|guard, _) = S.select(_, _|nj-guard|nj, _);
+        }
+
+        return res;
+    }
+
+    std::map<Index, Array> all(Field which)
+    {
+        auto res = std::map<Index, Array>();
+
+        for (const auto& patch : patches)
+        {
+            if (std::get<2>(patch.first) == which)
+            {
+                res.insert(patch);
+            }
+        }
         return res;
     }
 
@@ -273,6 +320,11 @@ public:
     auto end() const
     {
         return patches.end();
+    }
+
+    auto size() const
+    {
+        return patches.size();
     }
 
 private:
@@ -291,7 +343,6 @@ private:
     std::map<Field, int> field_size;
     std::map<Index, Array> patches;
 };
-
 
 
 
@@ -484,14 +535,17 @@ int main_2d(int argc, const char* argv[])
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
     auto database = DatabaseFMR(ni, nj, field_size);
 
-    for (int i = 0; i < 2; ++i)
+    auto Ni = 2;
+    auto Nj = 2;
+
+    for (int i = 0; i < Ni; ++i)
     {
-        for (int j = 0; j < 2; ++j)
+        for (int j = 0; j < Nj; ++j)
         {
-            double x0 = (i + 0) * 0.5;
-            double x1 = (i + 1) * 0.5;
-            double y0 = (j + 0) * 0.5;
-            double y1 = (j + 1) * 0.5;
+            double x0 = double(i + 0) / Ni;
+            double x1 = double(i + 1) / Ni;
+            double y0 = double(j + 0) / Nj;
+            double y1 = double(j + 1) / Nj;
 
             auto x_verts = mesh_vertices(ni, nj, x0, x1, y0, y1);
             auto x_cells = mesh_cell_centers(x_verts);
@@ -502,35 +556,39 @@ int main_2d(int argc, const char* argv[])
         }
     }
 
-
+    std::map<DatabaseFMR::Index, DatabaseFMR::Array> results;
 
     while (t < cfg.tfinal)
     {
         auto timer = Timer();
-        auto index = std::make_tuple(0, 0, Field::conserved);
 
-        database.commit(index, advance_2d(database.checkout(index, 2), dt, dx, dy), 0.0);
-        database.commit(index, advance_2d(database.checkout(index, 2), dt, dx, dy), 0.5);
+
+        for (const auto& patch : database.all(Field::conserved))
+        {
+            auto U = database.checkout(patch.first, 2);
+            results[patch.first].become(advance_2d(U, dt, dx, dy));
+        }
+        for (const auto& res : results)
+        {
+            database.commit(res.first, res.second, 0.0);
+        }
+
 
         t    += dt;
         iter += 1;
         wall += timer.seconds();
 
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni * nj / 1e3 / timer.seconds());
+        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni * nj * database.size() / 1e3 / timer.seconds());
     }
 
-    std::printf("average kzps=%f\n", ni * nj / 1e3 / wall * iter);
+    std::printf("average kzps=%f\n", ni * nj * database.size() / 1e3 / wall * iter);
 
 
-    for (const auto& patch : database)
+    for (const auto& patch : database.all(Field::conserved))
     {
-        if (std::get<2>(patch.first) == Field::conserved)
-        {
-            auto P = prim_to_cons(patch.second);
-            auto addr = std::to_string(std::get<0>(patch.first)) + "-" + std::to_string(std::get<1>(patch.first));
-
-            tofile(P.select(_, _, 0), "rho_" + addr + ".nd");
-        }
+        auto P = prim_to_cons(patch.second);
+        auto addr = std::to_string(std::get<0>(patch.first)) + "-" + std::to_string(std::get<1>(patch.first));
+        tofile(P.select(_, _, 0), "rho_" + addr + ".nd");
     }
 
     return 0;
@@ -542,7 +600,7 @@ int main_2d(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    std::set_terminate (terminate_with_backtrace);
+    std::set_terminate(Debug::terminate_with_backtrace);
     return main_2d(argc, argv);
 }
 
