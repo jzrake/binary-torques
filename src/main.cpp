@@ -2,12 +2,12 @@
 #include <iomanip>
 #include <fstream>
 #include <cmath>
+#include <vector>
 #include "app_utils.hpp"
 #include "ndarray.hpp"
 #include "visit_struct.hpp"
 #include "ufunc.hpp"
 #include "physics.hpp"
-
 
 
 
@@ -250,17 +250,17 @@ public:
      */
     Array checkout(Index index, int guard=0) const
     {
-        auto _ = nd::axis::all();
-        auto shape = std::array<int, 3>{ni + 2 * guard, nj + 2 * guard, 5};
+        auto _     = nd::axis::all();
+        auto ng    = guard;
+        auto shape = std::array<int, 3>{ni + 2 * ng, nj + 2 * ng, 5};
         auto res   = nd::array<double, 3>(shape);
-        auto data  = patches.at(index);
 
         res.select(_, _, 0) = 0.1;
         res.select(_, _, 1) = 0.0;
         res.select(_, _, 2) = 0.0;
         res.select(_, _, 3) = 0.0;
         res.select(_, _, 4) = 0.125;
-        res.select(_|guard|ni+guard, _|guard|nj+guard, _) = patches.at(index);
+        res.select(_|ng|ni+ng, _|ng|nj+ng, _) = patches.at(index);
 
         auto i = std::get<0>(index);
         auto j = std::get<1>(index);
@@ -273,32 +273,25 @@ public:
 
         if (patches.count(Ri))
         {
-            auto S = patches.at(Ri);
-            res.select(_|ni+guard|ni+2*guard, _|guard|nj+guard, _) = S.select(_|0|guard, _, _);
+            res.select(_|ni+ng|ni+2*ng, _|ng|nj+ng, _) = patches.at(Ri).select(_|0|ng, _, _);
         }
-
         if (patches.count(Rj))
         {
-            auto S = patches.at(Rj);
-            res.select(_|guard|ni+guard, _|nj+guard|nj+2*guard, _) = S.select(_, _|0|guard, _);
+            res.select(_|ng|ni+ng, _|nj+ng|nj+2*ng, _) = patches.at(Rj).select(_, _|0|ng, _);
         }
-
         if (patches.count(Li))
         {
-            auto S = patches.at(Li);
-            res.select(_|0|guard, _|guard|nj+guard, _) = S.select(_|ni-guard|ni, _, _);
+            res.select(_|0|ng, _|ng|nj+ng, _) = patches.at(Li).select(_|ni-ng|ni, _, _);
         }
-
         if (patches.count(Lj))
         {
-            auto S = patches.at(Lj);
-            res.select(_|guard|ni+guard, _|0|guard, _) = S.select(_, _|nj-guard|nj, _);
+            res.select(_|ng|ni+ng, _|0|ng, _) = patches.at(Lj).select(_, _|nj-ng|nj, _);
         }
 
         return res;
     }
 
-    std::map<Index, Array> all(Field which)
+    std::map<Index, Array> all(Field which) const
     {
         auto res = std::map<Index, Array>();
 
@@ -343,6 +336,37 @@ private:
     std::map<Field, int> field_size;
     std::map<Index, Array> patches;
 };
+
+
+
+
+// ============================================================================
+std::string index_to_string(DatabaseFMR::Index index)
+{
+    auto i = std::get<0>(index);
+    auto j = std::get<1>(index);
+    auto f = std::string();
+
+    switch (std::get<2>(index))
+    {
+        case Field::conserved: f = "conserved"; break;
+        case Field::cell_centers: f = "cell_centers"; break;
+    }
+    return f + "/" + std::to_string(i) + "-" + std::to_string(j);
+}
+
+void write_database(const DatabaseFMR& database)
+{
+    auto parts = std::vector<std::string> {"data", "chkpt.0000.bt"};
+
+    for (const auto& patch : database)
+    {
+        parts.push_back(index_to_string(patch.first) + ".nd");
+        FileSystem::ensureParentDirectoryExists(FileSystem::joinPath(parts));
+        tofile(patch.second, FileSystem::joinPath(parts));
+        parts.pop_back();
+    }
+}
 
 
 
@@ -516,7 +540,6 @@ int main_2d(int argc, const char* argv[])
     auto cfg = run_config::from_argv(argc, argv);
     cfg.print(std::cout);
 
-    auto _ = nd::axis::all();
     auto wall = 0.0;
     auto ni   = cfg.ni;
     auto nj   = cfg.nj;
@@ -549,10 +572,10 @@ int main_2d(int argc, const char* argv[])
 
             auto x_verts = mesh_vertices(ni, nj, x0, x1, y0, y1);
             auto x_cells = mesh_cell_centers(x_verts);
-            auto P = prim_to_cons(initial_data(x_cells));
+            auto U = prim_to_cons(initial_data(x_cells));
 
             database.insert(std::make_tuple(i, j, Field::cell_centers), x_cells);
-            database.insert(std::make_tuple(i, j, Field::conserved), P);
+            database.insert(std::make_tuple(i, j, Field::conserved), U);
         }
     }
 
@@ -583,14 +606,7 @@ int main_2d(int argc, const char* argv[])
 
     std::printf("average kzps=%f\n", ni * nj * database.size() / 1e3 / wall * iter);
 
-
-    for (const auto& patch : database.all(Field::conserved))
-    {
-        auto P = prim_to_cons(patch.second);
-        auto addr = std::to_string(std::get<0>(patch.first)) + "-" + std::to_string(std::get<1>(patch.first));
-        tofile(P.select(_, _, 0), "rho_" + addr + ".nd");
-    }
-
+    write_database(database);
     return 0;
 }
 

@@ -21,8 +21,8 @@ std::map<std::string, std::string> cmdline::parse_keyval(int argc, const char* a
 
         if (eq_index != std::string::npos)
         {
-            std::string key = arg.substr (0, eq_index);
-            std::string val = arg.substr (eq_index + 1);
+            std::string key = arg.substr(0, eq_index);
+            std::string val = arg.substr(eq_index + 1);
             items[key] = val;
         }
     }
@@ -33,61 +33,72 @@ std::map<std::string, std::string> cmdline::parse_keyval(int argc, const char* a
 
 
 // ============================================================================
-std::vector<std::string> FileSystem::splitPath (std::string pathName)
+std::vector<std::string> FileSystem::splitPath(std::string pathName)
 {
     auto remaining = pathName;
     auto dirs = std::vector<std::string>();
 
     while (true)
     {
-        auto slash = remaining.find ('/');
+        auto slash = remaining.find('/');
 
         if (slash == std::string::npos)
         {
-            dirs.push_back (remaining);
+            dirs.push_back(remaining);
             break;
         }
-        dirs.push_back (remaining.substr (0, slash));
-        remaining = remaining.substr (slash + 1);
+        dirs.push_back(remaining.substr(0, slash));
+        remaining = remaining.substr(slash + 1);
     }
     return dirs;
 }
 
-std::string FileSystem::fileExtension (std::string pathName)
+std::string FileSystem::joinPath(std::vector<std::string> parts)
 {
-    auto dot = pathName.rfind ('.');
+    auto res = std::string();
+
+    for (auto part : parts)
+    {
+        res += "/" + part;
+    }
+    return res.substr(1);
+}
+
+std::string FileSystem::fileExtension(std::string pathName)
+{
+    auto dot = pathName.rfind('.');
 
     if (dot != std::string::npos)
     {
-        return pathName.substr (dot);
+        return pathName.substr(dot);
     }
     return "";
 }
 
-std::string FileSystem::getParentDirectory (std::string pathName)
+std::string FileSystem::getParentDirectory(std::string pathName)
 {
-    std::string::size_type lastSlash = pathName.find_last_of ("/");
-    return pathName.substr (0, lastSlash);
+    std::string::size_type lastSlash = pathName.find_last_of("/");
+    return pathName.substr(0, lastSlash);
 }
 
-void FileSystem::ensureDirectoryExists (std::string dirName)
+void FileSystem::ensureDirectoryExists(std::string dirName)
 {
-    auto path = std::string (".");
+    auto path = std::string(".");
 
-    for (auto dir : splitPath (dirName))
+    for (auto dir : splitPath(dirName))
     {
         path += "/" + dir;
-        mkdir (path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        mkdir(path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     }
 }
 
-void FileSystem::ensureParentDirectoryExists (std::string pathName)
+void FileSystem::ensureParentDirectoryExists(std::string pathName)
 {
-    std::string parentDir = getParentDirectory (pathName);
-    mkdir (parentDir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    std::string parentDir = getParentDirectory(pathName);
+    ensureDirectoryExists(parentDir);
 }
 
-std::string FileSystem::makeFilename (
+std::string FileSystem::makeFilename(
     std::string directory,
     std::string base,
     std::string extension,
@@ -99,11 +110,11 @@ std::string FileSystem::makeFilename (
 
     if (number >= 0)
     {
-        filenameStream << "." << std::setfill ('0') << std::setw (4) << number;
+        filenameStream << "." << std::setfill('0') << std::setw(4) << number;
     }
     if (rank != -1)
     {
-        filenameStream << "." << std::setfill ('0') << std::setw (4) << rank;
+        filenameStream << "." << std::setfill('0') << std::setw(4) << rank;
     }
 
     filenameStream << extension;
@@ -171,7 +182,7 @@ void Debug::terminate_with_backtrace()
             std::rethrow_exception(e);
         }
     }
-    catch (std::exception& e)
+    catch(std::exception& e)
     {
         std::cout << std::string(52, '=') << std::endl;
         std::cout << "Uncaught exception: "<< e.what() << std::endl;

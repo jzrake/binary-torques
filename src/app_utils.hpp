@@ -87,6 +87,7 @@ class FileSystem
 {
 public:
     static std::vector<std::string> splitPath(std::string pathName);
+    static std::string joinPath(std::vector<std::string> parts);
     static std::string fileExtension(std::string pathName);
     static std::string getParentDirectory(std::string pathName);
     static void ensureDirectoryExists(std::string pathName);
