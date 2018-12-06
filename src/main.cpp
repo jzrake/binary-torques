@@ -1,7 +1,12 @@
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <cmath>
+#include <map>
 #include "ndarray.hpp"
+#include "visit_struct.hpp"
+#include "ufunc.hpp"
+#include "physics.hpp"
 
 
 
@@ -91,17 +96,6 @@ struct add_scaled
     double c;
 };
 
-struct add_weighted
-{
-    add_weighted(double c) : c(c) {}
-
-    inline double operator()(double a, double b) const
-    {
-        return a * (1 - c) + b * c;
-    }
-    double c;
-};
-
 struct add_diff_scaled
 {
     add_diff_scaled(double c) : c(c) {}
@@ -132,12 +126,6 @@ struct gaussian
     }
 };
 
-
-
-
-// ============================================================================
-#include "ufunc.hpp"
-#include "physics.hpp"
 
 
 
@@ -242,34 +230,119 @@ auto advance(nd::array<double, 2> U0, double dt, double dx)
 
 
 // ============================================================================
-#include "visit_struct.hpp"
-
-struct user
+namespace cmdline 
 {
-    std::string outdir;
-    double tfinal;
-};
-
-VISITABLE_STRUCT(user, outdir, tfinal);
-
-void debug_print(const user& u)
-{
-    visit_struct::for_each(u, [](const char* name, const auto& value)
+    std::map<std::string, std::string> parse_keyval(int argc, const char* argv[])
     {
-        std::cerr << name << ": " << value << std::endl;
-    });
+        std::map<std::string, std::string> items;
+
+        for (int n = 0; n < argc; ++n)
+        {
+            std::string arg = argv[n];
+            std::string::size_type eq_index = arg.find('=');
+
+            if (eq_index != std::string::npos)
+            {
+                std::string key = arg.substr (0, eq_index);
+                std::string val = arg.substr (eq_index + 1);
+                items[key] = val;
+            }
+        }
+        return items;
+    }
+
+    template <typename T>
+    void set_from_string(std::string source, T& value);
+
+    template <>
+    void set_from_string<std::string>(std::string source, std::string& value)
+    {
+        value = source;
+    }
+
+    template <>
+    void set_from_string<int>(std::string source, int& value)
+    {
+        value = std::stoi(source);
+    }
+
+    template <>
+    void set_from_string<double>(std::string source, double& value)
+    {
+        value = std::stod(source);
+    }
 }
 
 
 
 
 // ============================================================================
-int main()
+struct run_config
 {
-    user u;
+    std::string outdir = ".";
+    double tfinal = 1.0;
 
-    debug_print(u);
 
+    void print(std::ostream& os) const;
+    static run_config from_dict(std::map<std::string, std::string> items);
+    static run_config from_argv(int argc, const char* argv[]);
+};
+
+VISITABLE_STRUCT(run_config, outdir, tfinal);
+
+
+
+
+// ============================================================================
+run_config run_config::from_dict(std::map<std::string, std::string> items)
+{
+    run_config cfg;
+
+    visit_struct::for_each(cfg, [items] (const char* name, auto& value)
+    {
+        if (items.find(name) != items.end())
+        {
+            cmdline::set_from_string(items.at(name), value);
+        }
+    });
+    return cfg;
+}
+
+run_config run_config::from_argv(int argc, const char* argv[])
+{
+    return from_dict(cmdline::parse_keyval(argc, argv));
+}
+
+void run_config::print(std::ostream& os) const
+{
+    using std::left;
+    using std::setw;
+    using std::setfill;
+    using std::showpos;
+    const int W = 24;
+
+    os << "\n" << std::string(52, '=') << "\n";
+
+    std::ios orig(nullptr);
+    orig.copyfmt(os);
+
+    visit_struct::for_each(*this, [&os] (std::string name, auto& value)
+    {
+        os << left << setw(W) << setfill('.') << name + " " << " " << value << "\n";
+    });
+
+    os << std::string(52, '=') << "\n\n";
+    os.copyfmt(orig);
+}
+
+
+
+
+// ============================================================================
+int main(int argc, const char* argv[])
+{
+    auto cfg = run_config::from_argv(argc, argv);
+    cfg.print(std::cout);
 
     auto _ = nd::axis::all();
     auto wall = 0.0;
@@ -289,7 +362,7 @@ int main()
     auto database = Database(ni);
     database.commit(prim_to_cons(initial_data(x_cells)));
 
-    while (t < 0.1)
+    while (t < cfg.tfinal)
     {
         auto timer = Timer();
 
