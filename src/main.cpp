@@ -352,7 +352,7 @@ std::string index_to_string(DatabaseFMR::Index index)
         case Field::conserved: f = "conserved"; break;
         case Field::cell_centers: f = "cell_centers"; break;
     }
-    return f + "/" + std::to_string(i) + "-" + std::to_string(j);
+    return std::to_string(i) + "-" + std::to_string(j) + "/" + f;
 }
 
 void write_database(const DatabaseFMR& database)
@@ -361,11 +361,12 @@ void write_database(const DatabaseFMR& database)
 
     for (const auto& patch : database)
     {
-        parts.push_back(index_to_string(patch.first) + ".nd");
+        parts.push_back(index_to_string(patch.first));
         FileSystem::ensureParentDirectoryExists(FileSystem::joinPath(parts));
         tofile(patch.second, FileSystem::joinPath(parts));
         parts.pop_back();
     }
+    std::cout << "Write checkpoint " << FileSystem::joinPath(parts) << std::endl;
 }
 
 
@@ -558,8 +559,8 @@ int main_2d(int argc, const char* argv[])
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
     auto database = DatabaseFMR(ni, nj, field_size);
 
-    auto Ni = 2;
-    auto Nj = 2;
+    auto Ni = 3;
+    auto Nj = 3;
 
     for (int i = 0; i < Ni; ++i)
     {

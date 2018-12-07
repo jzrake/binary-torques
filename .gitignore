@@ -1,6 +1,7 @@
 *.nd
 *.h5
 *.o
+data
 bt
 Makefile.in
 src/visit_struct.hpp
