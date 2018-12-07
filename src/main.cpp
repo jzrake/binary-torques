@@ -3,6 +3,8 @@
 #include <fstream>
 #include <cmath>
 #include <vector>
+#include <thread>
+#include <future>
 #include "app_utils.hpp"
 #include "ndarray.hpp"
 #include "visit_struct.hpp"
@@ -501,6 +503,81 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
 
 
 // ============================================================================
+void update_2d_nothread(Database& database, double dt, double dx, double dy, double rk_factor)
+{
+    auto results = std::map<Database::Index, Database::Array>();
+
+    for (const auto& patch : database.all(Field::conserved))
+    {
+        auto U = database.checkout(patch.first, 2);
+        results[patch.first].become(advance_2d(U, dt, dx, dy));
+    }
+    for (const auto& res : results)
+    {
+        database.commit(res.first, res.second, rk_factor);
+    }
+}
+
+void update_2d_threaded(Database& database, double dt, double dx, double dy, double rk_factor)
+{
+    struct ThreadResult
+    {
+        nd::array<double, 3> U1;
+        Database::Index index;
+    };
+
+    std::vector<std::thread> threads;
+    std::vector<std::future<ThreadResult>> futures;
+
+    for (const auto& patch : database.all(Field::conserved))
+    {     
+        auto U = database.checkout(patch.first, 2);
+
+        std::promise<ThreadResult> advance_promise;
+        futures.push_back(advance_promise.get_future());
+
+        threads.push_back(std::thread([index=patch.first,U,dt,dx,dy] (auto promise)
+        {
+            ThreadResult res;
+            res.index = index;
+            res.U1.become(advance_2d(U, dt, dx, dy));
+            promise.set_value(res);
+        }, std::move(advance_promise)));
+    }
+    for (auto& f : futures)
+    {
+        auto res = f.get();
+        database.commit(res.index, res.U1, rk_factor);
+    }
+    for (auto& t : threads)
+    {
+        t.join();
+    }
+}
+
+void update(Database& database, double dt, double dx, double dy, int rk, int threaded)
+{
+    auto up = threaded ? update_2d_threaded : update_2d_nothread;
+
+    switch (rk)
+    {
+        case 1:
+            up(database, dt, dx, dy, 0.0);
+            break;
+        case 2:
+            up(database, dt, dx, dy, 0.0);
+            up(database, dt, dx, dy, 0.5);
+            break;
+        default:
+            throw std::invalid_argument("rk must be 1 or 2");
+    }
+
+}
+
+
+
+
+// ============================================================================
 nd::array<double, 3> mesh_vertices(
     int ni, int nj,
     double x0=0.0, double x1=1.0,
@@ -535,9 +612,6 @@ nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
 
 
 
-#include <thread>
-#include <future>
-
 // ============================================================================
 int main_2d(int argc, const char* argv[])
 {
@@ -571,9 +645,6 @@ int main_2d(int argc, const char* argv[])
     {
         for (int j = 0; j < Nj; ++j)
         {
-            if (i == 1 && j == 0)
-                continue;
-
             double x0 = double(i + 0) / Ni;
             double x1 = double(i + 1) / Ni;
             double y0 = double(j + 0) / Nj;
@@ -589,97 +660,25 @@ int main_2d(int argc, const char* argv[])
         }
     }
 
-    struct ThreadResult
-    {
-        nd::array<double, 3> U1;
-        Database::Index index;
-    };
-
+    // ========================================================================
+    // Main loop
+    // ========================================================================
     while (t < cfg.tfinal)
     {
         auto timer = Timer();
-
-
-
-        // Threaded patch execution
-        // ====================================================================
-        if (cfg.threaded)
-        {
-            std::vector<std::thread> threads;
-            std::vector<std::future<ThreadResult>> futures;
-
-            for (const auto& patch : database.all(Field::conserved))
-            {     
-                auto U = database.checkout(patch.first, 2);
-
-                std::promise<ThreadResult> advance_promise;
-                futures.push_back(advance_promise.get_future());
-
-                threads.push_back(std::thread([i=patch.first,U,dt,dx,dy] (auto promise)
-                {
-                    ThreadResult res;
-                    res.index = i;
-                    res.U1.become(advance_2d(U, dt, dx, dy));
-                    promise.set_value(res);
-                }, std::move(advance_promise)));
-            }
-            for (auto& f : futures)
-            {
-                auto res = f.get();
-                database.commit(res.index, res.U1, 0.0);
-            }
-            for (auto& t : threads)
-            {
-                t.join();
-            }
-        }
-
-
-
-        // Ordinary execution
-        // ====================================================================
-        else
-        {
-            auto results = std::map<Database::Index, Database::Array>();
-
-            for (const auto& patch : database.all(Field::conserved))
-            {
-                auto U = database.checkout(patch.first, 2);
-                results[patch.first].become(advance_2d(U, dt, dx, dy));
-            }
-            for (const auto& res : results)
-            {
-                database.commit(res.first, res.second, 0.0);
-            }
-        }
-
-
-
-        if (cfg.rk == 2)
-        {
-            auto results = std::map<Database::Index, Database::Array>();
-
-            for (const auto& patch : database.all(Field::conserved))
-            {
-                auto U = database.checkout(patch.first, 2);
-                results[patch.first].become(advance_2d(U, dt, dx, dy));
-            }
-            for (const auto& res : results)
-            {
-                database.commit(res.first, res.second, 0.5);
-            }
-        }
+        update(database, dt, dx, dy, cfg.rk, cfg.threaded);
 
         t    += dt;
         iter += 1;
         wall += timer.seconds();
+        auto kzps = database.num_cells() / 1e3 / timer.seconds();
 
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, database.num_cells() / 1e3 / timer.seconds());
+        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, kzps);
     }
 
     std::printf("average kzps=%f\n", database.num_cells() / 1e3 / wall * iter);
-
     write_database(database);
+
     return 0;
 }
 
