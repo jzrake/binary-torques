@@ -42,8 +42,8 @@ def imshow_database(database):
     ax1 = fig.add_subplot(1, 1, 1)
 
     for key, patch in database.items():
-        X = patch['cell_centers'][:,:,0]
-        Y = patch['cell_centers'][:,:,1]
+        X = patch['vert_coords'][:,:,0]
+        Y = patch['vert_coords'][:,:,1]
         D = patch['conserved'][:,:,0]
 
         extent = [X[0,0], X[-1,0], Y[0,0], Y[0,-1]]

@@ -2,6 +2,7 @@
 *.h5
 *.o
 data
+trash
 bt
 Makefile.in
 src/visit_struct.hpp
