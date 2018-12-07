@@ -159,9 +159,8 @@ public:
     }
 
     /**
-     * Merge the given data into the database at the given index, with the
-     * given weighting factor. Setting rk_factor=0.0 corresponds to
-     * overwriting the existing data.
+     * Merge data into the database at index, with the given weighting factor.
+     * Setting rk_factor=0.0 corresponds to overwriting the existing data.
      *
      * An exception is throws if a patch does not already exist at the given patch
      * index. Use insert to create a new patch.
@@ -206,13 +205,6 @@ public:
         auto shape = std::array<int, 3>{ni + 2 * ng, nj + 2 * ng, 5};
         auto res   = nd::array<double, 3>(shape);
 
-        res.select(_, _, 0) = 0.1;
-        res.select(_, _, 1) = 0.0;
-        res.select(_, _, 2) = 0.0;
-        res.select(_, _, 3) = 0.0;
-        res.select(_, _, 4) = 0.125;
-        res.select(_|ng|ni+ng, _|ng|nj+ng, _) = patches.at(index);
-
         auto i = std::get<0>(index);
         auto j = std::get<1>(index);
         auto p = std::get<2>(index);
@@ -223,22 +215,11 @@ public:
         auto Rj = std::make_tuple(i, j + 1, p, f);
         auto Lj = std::make_tuple(i, j - 1, p, f);
 
-        if (patches.count(Ri))
-        {
-            res.select(_|ni+ng|ni+2*ng, _|ng|nj+ng, _) = patches.at(Ri).select(_|0|ng, _, _);
-        }
-        if (patches.count(Rj))
-        {
-            res.select(_|ng|ni+ng, _|nj+ng|nj+2*ng, _) = patches.at(Rj).select(_, _|0|ng, _);
-        }
-        if (patches.count(Li))
-        {
-            res.select(_|0|ng, _|ng|nj+ng, _) = patches.at(Li).select(_|ni-ng|ni, _, _);
-        }
-        if (patches.count(Lj))
-        {
-            res.select(_|ng|ni+ng, _|0|ng, _) = patches.at(Lj).select(_, _|nj-ng|nj, _);
-        }
+        res.select(_|ng|ni+ng, _|ng|nj+ng, _) = patches.at(index);
+        res.select(_|ni+ng|ni+2*ng, _|ng|nj+ng, _) = locate(Ri).select(_|0|ng, _, _);
+        res.select(_|ng|ni+ng, _|nj+ng|nj+2*ng, _) = locate(Rj).select(_, _|0|ng, _);
+        res.select(_|0|ng, _|ng|nj+ng, _) = locate(Li).select(_|ni-ng|ni, _, _);
+        res.select(_|ng|ni+ng, _|0|ng, _) = locate(Lj).select(_, _|nj-ng|nj, _);
 
         return res;
     }
@@ -349,7 +330,8 @@ private:
             return restriction(tile(refine(index)));
         }
 
-        // Return a value based on boundary conditions
+        // Return a value based on some physical boundary conditions
+
         auto _ = nd::axis::all();
         auto res = nd::array<double, 3>(ni, nj, num_fields(index));
 
@@ -625,33 +607,31 @@ void update_2d_threaded(Database& database, double dt, double dx, double dy, dou
 {
     struct ThreadResult
     {
-        nd::array<double, 3> U1;
         Database::Index index;
+        nd::array<double, 3> U1;
     };
 
-    std::vector<std::thread> threads;
-    std::vector<std::future<ThreadResult>> futures;
+    auto threads = std::vector<std::thread>();
+    auto futures = std::vector<std::future<ThreadResult>>();
 
     for (const auto& patch : database.all(Field::conserved))
     {     
         auto U = database.checkout(patch.first, 2);
+        auto promise = std::promise<ThreadResult>();
 
-        std::promise<ThreadResult> advance_promise;
-        futures.push_back(advance_promise.get_future());
-
+        futures.push_back(promise.get_future());
         threads.push_back(std::thread([index=patch.first,U,dt,dx,dy] (auto promise)
         {
-            ThreadResult res;
-            res.index = index;
-            res.U1.become(advance_2d(U, dt, dx, dy));
-            promise.set_value(res);
-        }, std::move(advance_promise)));
+            promise.set_value({index, advance_2d(U, dt, dx, dy)});
+        }, std::move(promise)));
     }
+
     for (auto& f : futures)
     {
         auto res = f.get();
         database.commit(res.index, res.U1, rk_factor);
     }
+
     for (auto& t : threads)
     {
         t.join();
