@@ -128,7 +128,7 @@ enum class MeshLocation
 
 
 // ============================================================================
-class DatabaseFMR
+class Database
 {
 public:
 
@@ -153,7 +153,7 @@ public:
 
 
     // ========================================================================
-    DatabaseFMR(int ni, int nj, Header header)
+    Database(int ni, int nj, Header header)
     : ni(ni)
     , nj(nj)
     , header(header)
@@ -291,6 +291,10 @@ public:
         return patches.size();
     }
 
+    std::size_t num_cells() const
+    {
+        return size() * ni * nj;
+    }
 
 private:
     // ========================================================================
@@ -333,7 +337,7 @@ private:
 
 
 // ============================================================================
-std::string index_to_string(DatabaseFMR::Index index)
+std::string index_to_string(Database::Index index)
 {
     auto i = std::get<0>(index);
     auto j = std::get<1>(index);
@@ -348,7 +352,7 @@ std::string index_to_string(DatabaseFMR::Index index)
     return std::to_string(i) + "-" + std::to_string(j) + "/" + f;
 }
 
-void write_database(const DatabaseFMR& database)
+void write_database(const Database& database)
 {
     auto parts = std::vector<std::string> {"data", "chkpt.0000.bt"};
 
@@ -373,13 +377,14 @@ struct run_config
     int rk = 1;
     int ni = 100;
     int nj = 100;
+    int threaded = 0;
 
     void print(std::ostream& os) const;
     static run_config from_dict(std::map<std::string, std::string> items);
     static run_config from_argv(int argc, const char* argv[]);
 };
 
-VISITABLE_STRUCT(run_config, outdir, tfinal, rk, ni, nj);
+VISITABLE_STRUCT(run_config, outdir, tfinal, rk, ni, nj, threaded);
 
 
 
@@ -444,7 +449,7 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
         return u - (fri - fli) * dt / dx - (frj - flj) * dt / dy;
     };
 
-    auto gradient_est = ufunc::from(gradient_plm(1.5));
+    auto gradient_est = ufunc::from(gradient_plm(2.0));
     auto advance_cons = ufunc::nfrom(update_formula);
     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto godunov_flux_i = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
@@ -526,7 +531,8 @@ nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
 }
 
 
-
+#include <thread>
+#include <future>
 
 // ============================================================================
 int main_2d(int argc, const char* argv[])
@@ -543,7 +549,7 @@ int main_2d(int argc, const char* argv[])
     auto dy   = 1.0 / nj;
     auto dt   = std::min(dx, dy) * 0.125;
 
-    auto header = DatabaseFMR::Header
+    auto header = Database::Header
     {
         {Field::conserved,   {5, MeshLocation::cell}},
         {Field::cell_coords, {2, MeshLocation::cell}},
@@ -552,7 +558,7 @@ int main_2d(int argc, const char* argv[])
 
     auto initial_data = ufunc::vfrom(cylindrical_explosion());
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
-    auto database = DatabaseFMR(ni, nj, header);
+    auto database = Database(ni, nj, header);
 
     auto Ni = 3;
     auto Nj = 3;
@@ -561,6 +567,9 @@ int main_2d(int argc, const char* argv[])
     {
         for (int j = 0; j < Nj; ++j)
         {
+            if (i == 1 && j == 0)
+                continue;
+
             double x0 = double(i + 0) / Ni;
             double x1 = double(i + 1) / Ni;
             double y0 = double(j + 0) / Nj;
@@ -576,25 +585,76 @@ int main_2d(int argc, const char* argv[])
         }
     }
 
-    std::map<DatabaseFMR::Index, DatabaseFMR::Array> results;
+    struct ThreadResult
+    {
+        nd::array<double, 3> U1;
+        Database::Index index;
+    };
 
     while (t < cfg.tfinal)
     {
         auto timer = Timer();
 
 
-        for (const auto& patch : database.all(Field::conserved))
+
+        // Threaded patch execution
+        // ====================================================================
+        if (cfg.threaded)
         {
-            auto U = database.checkout(patch.first, 2);
-            results[patch.first].become(advance_2d(U, dt, dx, dy));
+            std::vector<std::thread> threads;
+            std::vector<std::future<ThreadResult>> futures;
+
+            for (const auto& patch : database.all(Field::conserved))
+            {     
+                auto U = database.checkout(patch.first, 2);
+
+                std::promise<ThreadResult> advance_promise;
+                futures.push_back(advance_promise.get_future());
+
+                threads.push_back(std::thread([i=patch.first,U,dt,dx,dy] (auto promise)
+                {
+                    ThreadResult res;
+                    res.index = i;
+                    res.U1.become(advance_2d(U, dt, dx, dy));
+                    promise.set_value(res);
+                }, std::move(advance_promise)));
+            }
+            for (auto& f : futures)
+            {
+                auto res = f.get();
+                database.commit(res.index, res.U1, 0.0);
+            }
+            for (auto& t : threads)
+            {
+                t.join();
+            }
         }
-        for (const auto& res : results)
+
+
+
+        // Ordinary execution
+        // ====================================================================
+        else
         {
-            database.commit(res.first, res.second, 0.0);
+            auto results = std::map<Database::Index, Database::Array>();
+
+            for (const auto& patch : database.all(Field::conserved))
+            {
+                auto U = database.checkout(patch.first, 2);
+                results[patch.first].become(advance_2d(U, dt, dx, dy));
+            }
+            for (const auto& res : results)
+            {
+                database.commit(res.first, res.second, 0.0);
+            }
         }
+
+
 
         if (cfg.rk == 2)
         {
+            auto results = std::map<Database::Index, Database::Array>();
+
             for (const auto& patch : database.all(Field::conserved))
             {
                 auto U = database.checkout(patch.first, 2);
@@ -606,15 +666,14 @@ int main_2d(int argc, const char* argv[])
             }
         }
 
-
         t    += dt;
         iter += 1;
         wall += timer.seconds();
 
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, ni * nj * database.size() / 1e3 / timer.seconds());
+        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, database.num_cells() / 1e3 / timer.seconds());
     }
 
-    std::printf("average kzps=%f\n", ni * nj * database.size() / 1e3 / wall * iter);
+    std::printf("average kzps=%f\n", database.num_cells() / 1e3 / wall * iter);
 
     write_database(database);
     return 0;
