@@ -41,28 +41,6 @@ struct gradient_plm
     double theta;
 };
 
-struct add_scaled
-{
-    add_scaled(double c) : c(c) {}
-
-    inline double operator()(double a, double b) const
-    {
-        return a + b * c;
-    }
-    double c;
-};
-
-struct add_diff_scaled
-{
-    add_diff_scaled(double c) : c(c) {}
-
-    inline double operator()(double a, double fl, double fr) const
-    {
-        return a + (fl - fr) * c;
-    }
-    double c;
-};
-
 struct shocktube
 {
     inline std::array<double, 5> operator()(std::array<double, 1> x) const
@@ -149,7 +127,7 @@ public:
 
 
     // ========================================================================
-    using Index = std::tuple<int, int, Field>;
+    using Index = std::tuple<int, int, int, Field>; // i, j, level, which
     using Array = nd::array<double, 3>;
     using Header = std::map<Field, FieldDescriptor>;
 
@@ -237,12 +215,13 @@ public:
 
         auto i = std::get<0>(index);
         auto j = std::get<1>(index);
-        auto f = std::get<2>(index);
+        auto p = std::get<2>(index);
+        auto f = std::get<3>(index);
 
-        auto Ri = std::make_tuple(i + 1, j, f);
-        auto Li = std::make_tuple(i - 1, j, f);
-        auto Rj = std::make_tuple(i, j + 1, f);
-        auto Lj = std::make_tuple(i, j - 1, f);
+        auto Ri = std::make_tuple(i + 1, j, p, f);
+        auto Li = std::make_tuple(i - 1, j, p, f);
+        auto Rj = std::make_tuple(i, j + 1, p, f);
+        auto Lj = std::make_tuple(i, j - 1, p, f);
 
         if (patches.count(Ri))
         {
@@ -270,7 +249,7 @@ public:
 
         for (const auto& patch : patches)
         {
-            if (std::get<2>(patch.first) == which)
+            if (std::get<3>(patch.first) == which)
             {
                 res.insert(patch);
             }
@@ -318,14 +297,138 @@ private:
         }
     }
 
+    Index coarsen(Index index) const
+    {
+        std::get<0>(index) /= 2;
+        std::get<1>(index) /= 2;
+        std::get<2>(index) -= 1;
+        return index;
+    }
+
+    std::array<Index, 4> refine(Index index) const
+    {
+        auto i = std::get<0>(index);
+        auto j = std::get<1>(index);
+        auto p = std::get<2>(index);
+        auto f = std::get<3>(index);
+
+        return {
+            std::make_tuple(i * 2 + 0, j * 2 + 1, p + 1, f),
+            std::make_tuple(i * 2 + 0, j * 2 + 0, p + 1, f),
+            std::make_tuple(i * 2 + 1, j * 2 + 1, p + 1, f),
+            std::make_tuple(i * 2 + 1, j * 2 + 0, p + 1, f),
+        };
+    }
+
     int num_fields(Index index) const
     {
-        return header.at(std::get<2>(index)).num_fields;
+        return header.at(std::get<3>(index)).num_fields;
     }
 
     MeshLocation location(Index index) const
     {
-        return header.at(std::get<2>(index)).location;
+        return header.at(std::get<3>(index)).location;
+    }
+
+    nd::array<double, 3> locate(Index index) const
+    {
+        if (patches.count(index))
+        {
+            return patches.at(index);
+        }
+
+        if (patches.count(coarsen(index)))
+        {
+            auto i = std::get<0>(index);
+            auto j = std::get<1>(index);
+            return prolongation(quadrant(patches.at(coarsen(index)), i % 2, j % 2));
+        }
+
+        if (contains_all(refine(index)))
+        {
+            return restriction(tile(refine(index)));
+        }
+
+        // Return a value based on boundary conditions
+        auto _ = nd::axis::all();
+        auto res = nd::array<double, 3>(ni, nj, num_fields(index));
+
+        res.select(_, _, 0) = 0.1;
+        res.select(_, _, 1) = 0.0;
+        res.select(_, _, 2) = 0.0;
+        res.select(_, _, 3) = 0.0;
+        res.select(_, _, 4) = 0.125;
+
+        return res;
+    }
+
+    template <typename IndexContainer>
+    bool contains_all(IndexContainer indexes) const
+    {
+        for (auto index : indexes)
+        {
+            if (patches.count(index) == 0)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    nd::array<double, 3> quadrant(const nd::array<double, 3>& A, int I, int J) const
+    {
+        auto _ = nd::axis::all();
+
+        if (I == 0 && J == 0) return A.select(_|0 |ni/2, _|0 |nj/2, _);
+        if (I == 0 && J == 1) return A.select(_|0 |ni/2, _|nj/2|nj, _);
+        if (I == 1 && J == 0) return A.select(_|ni/2|ni, _|0 |nj/2, _);
+        if (I == 1 && J == 1) return A.select(_|ni/2|ni, _|nj/2|nj, _);
+
+        throw std::invalid_argument("quadrant: I and J must be 0 or 1");
+    }
+
+    nd::array<double, 3> tile(std::array<Index, 4> indexes) const
+    {
+        auto _ = nd::axis::all();
+        nd::array<double, 3> res(ni * 2, nj * 2, num_fields(indexes[0]));
+
+        res.select(_|0 |ni/2, _|0 |nj/2, _) = patches.at(indexes[0]);
+        res.select(_|0 |ni/2, _|nj/2|nj, _) = patches.at(indexes[1]);
+        res.select(_|ni/2|ni, _|0 |nj/2, _) = patches.at(indexes[2]);
+        res.select(_|ni/2|ni, _|nj/2|nj, _) = patches.at(indexes[3]);
+
+        return res;
+    }
+
+    nd::array<double, 3> prolongation(const nd::array<double, 3>& A) const
+    {
+        auto _ = nd::axis::all();
+        nd::array<double, 3> res(ni, nj, A.shape(2));
+
+        res.select(_|0|ni|2, _|0|nj|2, _) = A;
+        res.select(_|0|ni|2, _|1|nj|2, _) = A;
+        res.select(_|1|ni|2, _|0|nj|2, _) = A;
+        res.select(_|1|ni|2, _|1|nj|2, _) = A;
+
+        return res;
+    }
+
+    nd::array<double, 3> restriction(const nd::array<double, 3>& A) const
+    {
+        auto _ = nd::axis::all();
+        auto B = std::array<nd::array<double, 3>, 4>
+        {
+            A.select(_|0|ni|2, _|0|nj|2, _),
+            A.select(_|0|ni|2, _|1|nj|2, _),
+            A.select(_|1|ni|2, _|0|nj|2, _),
+            A.select(_|1|ni|2, _|1|nj|2, _),
+        };
+
+        auto average = ufunc::nfrom([] (std::array<double, 4> b)
+        {
+            return (b[0] + b[1] + b[2] + b[3]) * 0.25;
+        });
+        return average(B);
     }
 
     // ========================================================================
@@ -345,7 +448,7 @@ std::string index_to_string(Database::Index index)
     auto j = std::get<1>(index);
     auto f = std::string();
 
-    switch (std::get<2>(index))
+    switch (std::get<3>(index))
     {
         case Field::conserved: f = "conserved"; break;
         case Field::cell_coords: f = "cell_coords"; break;
@@ -458,8 +561,8 @@ auto advance_2d(nd::array<double, 3> U0, double dt, double dx, double dy)
     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto godunov_flux_i = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
     auto godunov_flux_j = ufunc::vfrom(newtonian_hydro::riemann_hlle({0, 1, 0}));
-    auto extrap_l = ufunc::from(add_scaled(-0.5));
-    auto extrap_r = ufunc::from(add_scaled(+0.5));
+    auto extrap_l = ufunc::from([] (double a, double b) { return a - b * 0.5; });
+    auto extrap_r = ufunc::from([] (double a, double b) { return a + b * 0.5; });
 
     auto mi = U0.shape(0);
     auto mj = U0.shape(1);
@@ -654,9 +757,9 @@ int main_2d(int argc, const char* argv[])
             auto x_cells = mesh_cell_coords(x_verts);
             auto U = prim_to_cons(initial_data(x_cells));
 
-            database.insert(std::make_tuple(i, j, Field::cell_coords), x_cells);
-            database.insert(std::make_tuple(i, j, Field::vert_coords), x_verts);
-            database.insert(std::make_tuple(i, j, Field::conserved), U);
+            database.insert(std::make_tuple(i, j, 0, Field::cell_coords), x_cells);
+            database.insert(std::make_tuple(i, j, 0, Field::vert_coords), x_verts);
+            database.insert(std::make_tuple(i, j, 0, Field::conserved), U);
         }
     }
 
