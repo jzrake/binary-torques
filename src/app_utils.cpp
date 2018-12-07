@@ -1,9 +1,11 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
-#include <sys/stat.h>
 #include <libunwind.h>
 #include <cxxabi.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "app_utils.hpp"
 
 
@@ -96,6 +98,64 @@ void FileSystem::ensureParentDirectoryExists(std::string pathName)
 {
     std::string parentDir = getParentDirectory(pathName);
     ensureDirectoryExists(parentDir);
+}
+
+int FileSystem::removeRecursively(std::string path)
+{
+    /**
+     * Adapted from:
+     * 
+     * https://stackoverflow.com/questions/2256945/removing-a-non-empty-directory-programmatically-in-c-or-c
+     * 
+     * Uses methods:
+     * opendir, closedir, readdir, rmdir, unlink, stat, S_ISDIR
+     * 
+     * Uses structs:
+     * dirent, statbuf
+     * 
+    */
+
+    int res = -1;
+
+    if (auto d = opendir(path.data()))
+    {
+        struct dirent *p;
+        res = 0;
+
+        while (! res && (p = readdir(d)))
+        {
+            if (! std::strcmp(p->d_name, ".") || ! std::strcmp(p->d_name, ".."))
+            {
+                continue;
+            }
+
+            int res2 = -1;
+            auto buf = std::string(path.size() + std::strlen(p->d_name) + 2, 0);
+
+            std::snprintf(&buf[0], buf.size(), "%s/%s", path.data(), p->d_name);
+            struct stat statbuf;
+
+            if (! stat(buf.data(), &statbuf))
+            {
+                if (S_ISDIR(statbuf.st_mode))
+                {
+                    res2 = removeRecursively(buf.data());
+                }
+                else
+                {
+                    res2 = unlink(buf.data());
+                }
+            }
+            res = res2;
+        }
+        closedir(d);
+    }
+
+    if (! res)
+    {
+        res = rmdir(path.data());
+    }
+    return res;
 }
 
 std::string FileSystem::makeFilename(

@@ -354,7 +354,9 @@ std::string index_to_string(Database::Index index)
 
 void write_database(const Database& database)
 {
-    auto parts = std::vector<std::string> {"data", "chkpt.0000.bt"};
+    auto parts = std::vector<std::string>{"data", "chkpt.0000.bt"};
+
+    FileSystem::removeRecursively(FileSystem::joinPath(parts));
 
     for (const auto& patch : database)
     {
@@ -529,6 +531,8 @@ nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
     verts.select(_|1|ni+1, _|0|nj+0, _) +
     verts.select(_|1|ni+1, _|1|nj+1, _)) * 0.25;
 }
+
+
 
 
 #include <thread>

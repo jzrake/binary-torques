@@ -92,6 +92,7 @@ public:
     static std::string getParentDirectory(std::string pathName);
     static void ensureDirectoryExists(std::string pathName);
     static void ensureParentDirectoryExists(std::string dirName);
+    static int removeRecursively(std::string pathName);
     static std::string makeFilename(
         std::string directory,
         std::string base,
