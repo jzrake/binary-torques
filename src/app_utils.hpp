@@ -6,18 +6,20 @@
 
 
 // ============================================================================
-template<typename Writeable>
-void tofile(const Writeable& writeable, const std::string& fname)
-{
-    std::ofstream outfile(fname, std::ofstream::binary | std::ios::out);
-
-    if (! outfile.is_open())
+namespace nd {
+    template<typename Writeable>
+    void tofile(const Writeable& writeable, const std::string& fname)
     {
-        throw std::invalid_argument("file " + fname + " could not be opened for writing");
+        std::ofstream outfile(fname, std::ofstream::binary | std::ios::out);
+    
+        if (! outfile.is_open())
+        {
+            throw std::invalid_argument("file " + fname + " could not be opened for writing");
+        }
+        auto s = writeable.dumps();
+        outfile.write(s.data(), s.size());
+        outfile.close();
     }
-    auto s = writeable.dumps();
-    outfile.write(s.data(), s.size());
-    outfile.close();
 }
 
 

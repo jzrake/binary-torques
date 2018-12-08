@@ -73,15 +73,16 @@ struct cylindrical_explosion
     }
 };
 
-struct gaussian
+struct gaussian_density
 {
-    inline std::array<double, 5> operator()(std::array<double, 1> x) const
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
     {
-        auto d = 1 + std::exp(-(x[0] - 0.5) * (x[0] - 0.5) / 0.01);
-        return std::array<double, 5>{d, 0.0, 0.0, 0.0, 1.000};
+        auto x = X[0] - 0.25;
+        auto y = X[1] - 0.25;
+        auto d = 1 + std::exp(-(x * x + y * y) / 0.01);
+        return std::array<double, 5>{d, 0.5, 0.5, 0.0, 1.000};
     }
 };
-
 
 
 
@@ -94,15 +95,27 @@ enum class Field
     conserved,
 };
 
-
-
-
-// ============================================================================
 enum class MeshLocation
 {
     vert,
     cell,
 };
+
+std::string to_string(std::tuple<int, int, int, Field> index)
+{
+    auto i = std::get<0>(index);
+    auto j = std::get<1>(index);
+    auto p = std::get<2>(index);
+    auto f = std::string();
+
+    switch (std::get<3>(index))
+    {
+        case Field::conserved: f = "conserved"; break;
+        case Field::cell_coords: f = "cell_coords"; break;
+        case Field::vert_coords: f = "vert_coords"; break;
+    }
+    return std::to_string(p) + ":" + std::to_string(i) + "-" + std::to_string(j) + "/" + f;
+}
 
 
 
@@ -216,8 +229,10 @@ public:
         auto Lj = std::make_tuple(i, j - 1, p, f);
 
         res.select(_|ng|ni+ng, _|ng|nj+ng, _) = patches.at(index);
+
         res.select(_|ni+ng|ni+2*ng, _|ng|nj+ng, _) = locate(Ri).select(_|0|ng, _, _);
         res.select(_|ng|ni+ng, _|nj+ng|nj+2*ng, _) = locate(Rj).select(_, _|0|ng, _);
+
         res.select(_|0|ng, _|ng|nj+ng, _) = locate(Li).select(_|ni-ng|ni, _, _);
         res.select(_|ng|ni+ng, _|0|ng, _) = locate(Lj).select(_, _|nj-ng|nj, _);
 
@@ -294,10 +309,10 @@ private:
         auto f = std::get<3>(index);
 
         return {
-            std::make_tuple(i * 2 + 0, j * 2 + 1, p + 1, f),
             std::make_tuple(i * 2 + 0, j * 2 + 0, p + 1, f),
-            std::make_tuple(i * 2 + 1, j * 2 + 1, p + 1, f),
+            std::make_tuple(i * 2 + 0, j * 2 + 1, p + 1, f),
             std::make_tuple(i * 2 + 1, j * 2 + 0, p + 1, f),
+            std::make_tuple(i * 2 + 1, j * 2 + 1, p + 1, f),
         };
     }
 
@@ -374,10 +389,10 @@ private:
         auto _ = nd::axis::all();
         nd::array<double, 3> res(ni * 2, nj * 2, num_fields(indexes[0]));
 
-        res.select(_|0 |ni/2, _|0 |nj/2, _) = patches.at(indexes[0]);
-        res.select(_|0 |ni/2, _|nj/2|nj, _) = patches.at(indexes[1]);
-        res.select(_|ni/2|ni, _|0 |nj/2, _) = patches.at(indexes[2]);
-        res.select(_|ni/2|ni, _|nj/2|nj, _) = patches.at(indexes[3]);
+        res.select(_|0 |ni*1, _|0 |nj*1, _) = patches.at(indexes[0]);
+        res.select(_|0 |ni*1, _|nj|nj*2, _) = patches.at(indexes[1]);
+        res.select(_|ni|ni*2, _|0 |nj*1, _) = patches.at(indexes[2]);
+        res.select(_|ni|ni*2, _|nj|nj*2, _) = patches.at(indexes[3]);
 
         return res;
     }
@@ -398,12 +413,15 @@ private:
     nd::array<double, 3> restriction(const nd::array<double, 3>& A) const
     {
         auto _ = nd::axis::all();
+        auto mi = A.shape(0);
+        auto mj = A.shape(1);
+
         auto B = std::array<nd::array<double, 3>, 4>
         {
-            A.select(_|0|ni|2, _|0|nj|2, _),
-            A.select(_|0|ni|2, _|1|nj|2, _),
-            A.select(_|1|ni|2, _|0|nj|2, _),
-            A.select(_|1|ni|2, _|1|nj|2, _),
+            A.select(_|0|mi|2, _|0|mj|2, _),
+            A.select(_|0|mi|2, _|1|mj|2, _),
+            A.select(_|1|mi|2, _|0|mj|2, _),
+            A.select(_|1|mi|2, _|1|mj|2, _),
         };
 
         auto average = ufunc::nfrom([] (std::array<double, 4> b)
@@ -424,21 +442,6 @@ private:
 
 
 // ============================================================================
-std::string index_to_string(Database::Index index)
-{
-    auto i = std::get<0>(index);
-    auto j = std::get<1>(index);
-    auto f = std::string();
-
-    switch (std::get<3>(index))
-    {
-        case Field::conserved: f = "conserved"; break;
-        case Field::cell_coords: f = "cell_coords"; break;
-        case Field::vert_coords: f = "vert_coords"; break;
-    }
-    return std::to_string(i) + "-" + std::to_string(j) + "/" + f;
-}
-
 void write_database(const Database& database)
 {
     auto parts = std::vector<std::string>{"data", "chkpt.0000.bt"};
@@ -447,9 +450,9 @@ void write_database(const Database& database)
 
     for (const auto& patch : database)
     {
-        parts.push_back(index_to_string(patch.first));
+        parts.push_back(to_string(patch.first));
         FileSystem::ensureParentDirectoryExists(FileSystem::joinPath(parts));
-        tofile(patch.second, FileSystem::joinPath(parts));
+        nd::tofile(patch.second, FileSystem::joinPath(parts));
         parts.pop_back();
     }
     std::cout << "Write checkpoint " << FileSystem::joinPath(parts) << std::endl;
@@ -595,7 +598,8 @@ void update_2d_nothread(Database& database, double dt, double dx, double dy, dou
     for (const auto& patch : database.all(Field::conserved))
     {
         auto U = database.checkout(patch.first, 2);
-        results[patch.first].become(advance_2d(U, dt, dx, dy));
+        auto p = std::get<2>(patch.first);
+        results[patch.first].become(advance_2d(U, dt, dx / (1 << p), dy / (1 << p)));
     }
     for (const auto& res : results)
     {
@@ -617,12 +621,13 @@ void update_2d_threaded(Database& database, double dt, double dx, double dy, dou
     for (const auto& patch : database.all(Field::conserved))
     {     
         auto U = database.checkout(patch.first, 2);
+        auto p = std::get<2>(patch.first);
         auto promise = std::promise<ThreadResult>();
 
         futures.push_back(promise.get_future());
-        threads.push_back(std::thread([index=patch.first,U,dt,dx,dy] (auto promise)
+        threads.push_back(std::thread([index=patch.first,U,p,dt,dx,dy] (auto promise)
         {
-            promise.set_value({index, advance_2d(U, dt, dx, dy)});
+            promise.set_value({index, advance_2d(U, dt, dx / (1 << p), dy / (1 << p))});
         }, std::move(promise)));
     }
 
@@ -654,19 +659,19 @@ void update(Database& database, double dt, double dx, double dy, int rk, int thr
         default:
             throw std::invalid_argument("rk must be 1 or 2");
     }
-
 }
 
 
 
 
 // ============================================================================
-nd::array<double, 3> mesh_vertices(
-    int ni, int nj,
-    double x0=0.0, double x1=1.0,
-    double y0=0.0, double y1=1.0)
+nd::array<double, 3> mesh_vertices(int ni, int nj, std::array<double, 4> extent)
 {
     auto X = nd::array<double, 3>(ni + 1, nj + 1, 2);
+    auto x0 = extent[0];
+    auto x1 = extent[1];
+    auto y0 = extent[2];
+    auto y1 = extent[3];
 
     for (int i = 0; i < ni + 1; ++i)
     {
@@ -696,6 +701,84 @@ nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
 
 
 // ============================================================================
+Database build_database(int ni, int nj)
+{
+    auto extent = [] (int i, int j, int level)
+    {
+        auto Ni = 3 * (1 << level);
+        auto Nj = 3 * (1 << level);
+
+        double x0 = double(i + 0) / Ni;
+        double x1 = double(i + 1) / Ni;
+        double y0 = double(j + 0) / Nj;
+        double y1 = double(j + 1) / Nj;
+
+        return std::array<double, 4>{x0, x1, y0, y1};
+    };
+
+    auto header = Database::Header
+    {
+        {Field::conserved,   {5, MeshLocation::cell}},
+        {Field::cell_coords, {2, MeshLocation::cell}},
+        {Field::vert_coords, {2, MeshLocation::vert}},
+    };
+
+    auto database = Database(ni, nj, header);
+    auto initial_data = ufunc::vfrom(cylindrical_explosion()); // gaussian_density());
+    auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
+
+    auto Ni = 3; // number of base blocks
+    auto Nj = 3;
+
+    for (int i = 0; i < Ni; ++i)
+    {
+        for (int j = 0; j < Nj; ++j)
+        {
+            if (i != 1 || j != 1)
+            {
+                auto x_verts = mesh_vertices(ni, nj, extent(i, j, 0));
+                auto x_cells = mesh_cell_coords(x_verts);
+                auto U = prim_to_cons(initial_data(x_cells));
+
+                database.insert(std::make_tuple(i, j, 0, Field::cell_coords), x_cells);
+                database.insert(std::make_tuple(i, j, 0, Field::vert_coords), x_verts);
+                database.insert(std::make_tuple(i, j, 0, Field::conserved), U);
+            }
+        }
+    }
+
+    for (int i = 0; i < Ni * 2; ++i)
+    {
+        for (int j = 0; j < Nj * 2; ++j)
+        {
+            if ((i == 2 || i == 3) && (j == 2 || j == 3))
+            {
+                auto x_verts = mesh_vertices(ni, nj, extent(i, j, 1));
+                auto x_cells = mesh_cell_coords(x_verts);
+                auto U = prim_to_cons(initial_data(x_cells));
+
+                database.insert(std::make_tuple(i, j, 1, Field::cell_coords), x_cells);
+                database.insert(std::make_tuple(i, j, 1, Field::vert_coords), x_verts);
+                database.insert(std::make_tuple(i, j, 1, Field::conserved), U);
+            }
+        }
+    }
+
+    for (const auto& patch : database.all(Field::vert_coords))
+    {
+        std::cout << to_string(patch.first) << std::endl;
+    }
+
+    // [0      ] [1      ] [2      ]
+    // [0   1  ] [2   3  ] [4   5  ]
+    // [0 1 2 3] [4 5 6 7] [8 9 a b]
+    return database;
+}
+
+
+
+
+// ============================================================================
 int main_2d(int argc, const char* argv[])
 {
     auto cfg = run_config::from_argv(argc, argv);
@@ -709,39 +792,10 @@ int main_2d(int argc, const char* argv[])
     auto dx   = 1.0 / ni;
     auto dy   = 1.0 / nj;
     auto dt   = std::min(dx, dy) * 0.125;
+    auto database = build_database(ni, nj);
 
-    auto header = Database::Header
-    {
-        {Field::conserved,   {5, MeshLocation::cell}},
-        {Field::cell_coords, {2, MeshLocation::cell}},
-        {Field::vert_coords, {2, MeshLocation::vert}},
-    };
 
-    auto initial_data = ufunc::vfrom(cylindrical_explosion());
-    auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
-    auto database = Database(ni, nj, header);
 
-    auto Ni = 3;
-    auto Nj = 3;
-
-    for (int i = 0; i < Ni; ++i)
-    {
-        for (int j = 0; j < Nj; ++j)
-        {
-            double x0 = double(i + 0) / Ni;
-            double x1 = double(i + 1) / Ni;
-            double y0 = double(j + 0) / Nj;
-            double y1 = double(j + 1) / Nj;
-
-            auto x_verts = mesh_vertices(ni, nj, x0, x1, y0, y1);
-            auto x_cells = mesh_cell_coords(x_verts);
-            auto U = prim_to_cons(initial_data(x_cells));
-
-            database.insert(std::make_tuple(i, j, 0, Field::cell_coords), x_cells);
-            database.insert(std::make_tuple(i, j, 0, Field::vert_coords), x_verts);
-            database.insert(std::make_tuple(i, j, 0, Field::conserved), U);
-        }
-    }
 
     // ========================================================================
     // Main loop

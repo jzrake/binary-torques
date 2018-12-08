@@ -42,13 +42,13 @@ def imshow_database(database):
     ax1 = fig.add_subplot(1, 1, 1)
 
     for key, patch in database.items():
-        X = patch['vert_coords'][:,:,0]
-        Y = patch['vert_coords'][:,:,1]
+        X = patch['cell_coords'][:,:,0]
+        Y = patch['cell_coords'][:,:,1]
         D = patch['conserved'][:,:,0]
 
         extent = [X[0,0], X[-1,0], Y[0,0], Y[0,-1]]
 
-        ax1.imshow(D.T, origin='bottom', extent=extent, vmin=0.1, vmax=1.05)
+        ax1.imshow(D.T, origin='bottom', extent=extent, vmin=0.0, vmax=1.1)
 
     ax1.set_xlim(0, 1)
     ax1.set_ylim(0, 1)
@@ -63,18 +63,3 @@ if __name__ == "__main__":
 
     db = load_checkpoint(args.filenames[0])
     imshow_database(db)
-
-    # import matplotlib.pyplot as plt
-
-    # if len(args.filenames) == 2:
-    #     x = load(args.filenames[0])
-    #     y = load(args.filenames[1])
-    #     plt.plot(x, y, '-o', mfc='none')
-    #     plt.show()
-
-    # else:
-    #     y = load(args.filenames[0])
-    #     plt.imshow(y)
-    #     plt.colorbar()
-    #     plt.show()
-
