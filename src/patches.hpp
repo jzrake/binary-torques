@@ -33,11 +33,7 @@ namespace patches2d {
     // ========================================================================
     struct FieldDescriptor
     {
-        FieldDescriptor(int num_fields, MeshLocation location)
-        : num_fields(num_fields)
-        , location(location)
-        {
-        }
+        FieldDescriptor(int num_fields, MeshLocation location);
         int num_fields;
         MeshLocation location;
     };
@@ -117,15 +113,15 @@ private:
     // ========================================================================
     int num_fields(Index index) const;
     MeshLocation location(Index index) const;
-    Array check_shape(Array& array, Index index) const;
-    Index coarsen(Index index) const;
-    std::array<Index, 4> refine(Index index) const;
     std::array<int, 3> expected_shape(Index index) const;
-    nd::array<double, 3> locate(Index index) const;
-    nd::array<double, 3> quadrant(const nd::array<double, 3>& A, int I, int J) const;
-    nd::array<double, 3> tile(std::array<Index, 4> indexes) const;
-    nd::array<double, 3> prolongation(const nd::array<double, 3>& A) const;
-    nd::array<double, 3> restriction(const nd::array<double, 3>& A) const;
+    std::array<Index, 4> refine(Index index) const;
+    Index coarsen(Index index) const;
+    Array check_shape(Array& array, Index index) const;
+    Array locate(Index index) const;
+    Array quadrant(const nd::array<double, 3>& A, int I, int J) const;
+    Array tile(std::array<Index, 4> indexes) const;
+    Array prolongation(const nd::array<double, 3>& A) const;
+    Array restriction(const nd::array<double, 3>& A) const;
 
     template <typename IndexContainer>
     bool contains_all(IndexContainer indexes) const
@@ -149,6 +145,8 @@ private:
 
 
 
+
+// ============================================================================
 namespace patches2d {
     std::string to_string(Database::Index index);
 }

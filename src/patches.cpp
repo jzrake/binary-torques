@@ -1,6 +1,5 @@
 #include <ostream>
 #include "patches.hpp"
-#include "ufunc.hpp"
 
 using namespace patches2d;
 
@@ -27,6 +26,17 @@ std::string patches2d::to_string(Database::Index index)
 
 
 
+// ============================================================================
+FieldDescriptor::FieldDescriptor(int num_fields, MeshLocation location)
+: num_fields(num_fields)
+, location(location)
+{
+}
+
+
+
+
+// ============================================================================
 Database::Database(int ni, int nj, Header header)
 : ni(ni)
 , nj(nj)
@@ -59,11 +69,7 @@ void Database::commit(Index index, Array data, double rk_factor)
     }
     else
     {
-        auto average = ufunc::from([c=rk_factor] (double a, double b)
-        {
-            return a * (1 - c) + b * c;
-        });
-        target = average(data, target);            
+        target = data * (1 - rk_factor) + target * rk_factor;
     }
 }
 
@@ -116,26 +122,26 @@ std::map<Database::Index, Database::Array> Database::all(Field which) const
 
 std::size_t Database::count(Field which) const
 {
-	std::size_t n = 0;
+    std::size_t n = 0;
 
-	for (const auto& patch : patches)
-	{
-	    if (std::get<3>(patch.first) == which)
-	    {
-	        ++n;
-	    }
-	}
-	return n;
+    for (const auto& patch : patches)
+    {
+        if (std::get<3>(patch.first) == which)
+        {
+            ++n;
+        }
+    }
+    return n;
 }
 
 std::size_t Database::num_cells(Field which) const
 {
-	return count(which) * ni * nj;
+    return count(which) * ni * nj;
 }
 
 void Database::print(std::ostream& os) const
 {
-	os << std::string(52, '=') << "\n";
+    os << std::string(52, '=') << "\n";
     os << "Mesh patches:\n\n";
 
     for (const auto& patch : patches)
@@ -284,10 +290,5 @@ nd::array<double, 3> Database::restriction(const nd::array<double, 3>& A) const
         A.select(_|1|mi|2, _|0|mj|2, _),
         A.select(_|1|mi|2, _|1|mj|2, _),
     };
-
-    auto average = ufunc::nfrom([] (std::array<double, 4> b)
-    {
-        return (b[0] + b[1] + b[2] + b[3]) * 0.25;
-    });
-    return average(B);
+    return (B[0] + B[1] + B[2] + B[3]) * 0.25;
 }

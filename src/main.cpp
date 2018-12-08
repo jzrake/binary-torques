@@ -7,11 +7,10 @@
 #include <future>
 #include "app_utils.hpp"
 #include "ndarray.hpp"
-#include "visit_struct.hpp"
-#include "ufunc.hpp"
 #include "physics.hpp"
 #include "patches.hpp"
-
+#include "ufunc.hpp"
+#include "visit_struct.hpp"
 
 using namespace patches2d;
 
@@ -119,7 +118,7 @@ struct run_config
     static run_config from_argv(int argc, const char* argv[]);
 
     std::string outdir = ".";
-    double tfinal = 1.0;
+    double tfinal = 0.1;
     int rk = 1;
     int ni = 100;
     int nj = 100;
@@ -435,7 +434,7 @@ Database build_database(int ni, int nj, int num_levels)
 // ============================================================================
 int main_2d(int argc, const char* argv[])
 {
-    auto cfg = run_config::from_argv(argc, argv);
+    auto cfg  = run_config::from_argv(argc, argv);
     auto wall = 0.0;
     auto ni   = cfg.ni;
     auto nj   = cfg.nj;
