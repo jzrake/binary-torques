@@ -86,7 +86,7 @@ public:
      * given number of guard zones. If no data exists at that index, or the
      * data has the wrong size, an exception is thrown.
      */
-    Array checkout(Index index, int guard=0) const;
+    Array fetch(Index index, int guard=0) const;
 
     /** Return all patches registered for the given field. */
     std::map<Index, Array> all(Field which) const;

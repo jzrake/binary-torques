@@ -255,7 +255,7 @@ void update_2d_nothread(Database& database, double dt, double dx, double dy, dou
 
     for (const auto& patch : database.all(Field::conserved))
     {
-        auto U = database.checkout(patch.first, 2);
+        auto U = database.fetch(patch.first, 2);
         auto p = std::get<2>(patch.first);
         results[patch.first].become(advance_2d(U, dt, dx / (1 << p), dy / (1 << p)));
     }
@@ -278,7 +278,7 @@ void update_2d_threaded(Database& database, double dt, double dx, double dy, dou
 
     for (const auto& patch : database.all(Field::conserved))
     {     
-        auto U = database.checkout(patch.first, 2);
+        auto U = database.fetch(patch.first, 2);
         auto p = std::get<2>(patch.first);
         auto promise = std::promise<ThreadResult>();
 

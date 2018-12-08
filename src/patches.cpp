@@ -73,11 +73,11 @@ void Database::commit(Index index, Array data, double rk_factor)
     }
 }
 
-Database::Array Database::checkout(Index index, int guard) const
+Database::Array Database::fetch(Index index, int guard) const
 {
     if (location(index) != MeshLocation::cell)
     {
-        throw std::invalid_argument("Can only checkout cell data (for now)");
+        throw std::invalid_argument("Can only fetch cell data (for now)");
     }
 
     auto _     = nd::axis::all();
