@@ -114,19 +114,27 @@ void write_database(const Database& database)
 // ============================================================================
 struct run_config
 {
+    void print(std::ostream& os) const;
+    static run_config from_dict(std::map<std::string, std::string> items);
+    static run_config from_argv(int argc, const char* argv[]);
+
     std::string outdir = ".";
     double tfinal = 1.0;
     int rk = 1;
     int ni = 100;
     int nj = 100;
+    int num_levels = 1;
     int threaded = 0;
-
-    void print(std::ostream& os) const;
-    static run_config from_dict(std::map<std::string, std::string> items);
-    static run_config from_argv(int argc, const char* argv[]);
 };
 
-VISITABLE_STRUCT(run_config, outdir, tfinal, rk, ni, nj, threaded);
+VISITABLE_STRUCT(run_config,
+    outdir,
+    tfinal,
+    rk,
+    ni,
+    nj,
+    num_levels,
+    threaded);
 
 
 
@@ -352,7 +360,7 @@ nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
 
 
 // ============================================================================
-Database build_database(int ni, int nj)
+Database build_database(int ni, int nj, int num_levels)
 {
     auto extent = [] (int i, int j, int level)
     {
@@ -385,7 +393,7 @@ Database build_database(int ni, int nj)
     {
         for (int j = 0; j < Nj; ++j)
         {
-            if (i != 1 || j != 1)
+            if (num_levels == 1 || (i != 1 || j != 1))
             {
                 auto x_verts = mesh_vertices(ni, nj, extent(i, j, 0));
                 auto x_cells = mesh_cell_coords(x_verts);
@@ -402,7 +410,7 @@ Database build_database(int ni, int nj)
     {
         for (int j = 0; j < Nj * 2; ++j)
         {
-            if ((i == 2 || i == 3) && (j == 2 || j == 3))
+            if (num_levels == 2 && (i == 2 || i == 3) && (j == 2 || j == 3))
             {
                 auto x_verts = mesh_vertices(ni, nj, extent(i, j, 1));
                 auto x_cells = mesh_cell_coords(x_verts);
@@ -436,7 +444,7 @@ int main_2d(int argc, const char* argv[])
     auto dx   = 1.0 / ni;
     auto dy   = 1.0 / nj;
     auto dt   = std::min(dx, dy) * 0.125;
-    auto database = build_database(ni, nj);
+    auto database = build_database(ni, nj, cfg.num_levels);
 
 
     // ========================================================================
