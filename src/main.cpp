@@ -10,6 +10,10 @@
 #include "visit_struct.hpp"
 #include "ufunc.hpp"
 #include "physics.hpp"
+#include "patches.hpp"
+
+
+using namespace patches2d;
 
 
 
@@ -88,360 +92,6 @@ struct gaussian_density
 
 
 // ============================================================================
-enum class Field
-{
-    cell_coords,
-    vert_coords,
-    conserved,
-};
-
-enum class MeshLocation
-{
-    vert,
-    cell,
-};
-
-std::string to_string(std::tuple<int, int, int, Field> index)
-{
-    auto i = std::get<0>(index);
-    auto j = std::get<1>(index);
-    auto p = std::get<2>(index);
-    auto f = std::string();
-
-    switch (std::get<3>(index))
-    {
-        case Field::conserved: f = "conserved"; break;
-        case Field::cell_coords: f = "cell_coords"; break;
-        case Field::vert_coords: f = "vert_coords"; break;
-    }
-    return std::to_string(p) + ":" + std::to_string(i) + "-" + std::to_string(j) + "/" + f;
-}
-
-
-
-
-// ============================================================================
-class Database
-{
-public:
-
-
-    // ========================================================================
-    struct FieldDescriptor
-    {
-        FieldDescriptor(int num_fields, MeshLocation location)
-        : num_fields(num_fields)
-        , location(location)
-        {
-        }
-        int num_fields;
-        MeshLocation location;
-    };
-
-
-    // ========================================================================
-    using Index = std::tuple<int, int, int, Field>; // i, j, level, which
-    using Array = nd::array<double, 3>;
-    using Header = std::map<Field, FieldDescriptor>;
-
-
-    // ========================================================================
-    Database(int ni, int nj, Header header)
-    : ni(ni)
-    , nj(nj)
-    , header(header)
-    {
-    }
-
-
-    /**
-     * Insert a deep copy of the given array into the database at the given
-     * patch index. Any existing data at that location is overwritten.
-     */
-    void insert(Index index, Array data)
-    {
-        patches[index].become(check_shape(data, index).copy());
-    }
-
-    /**
-     * Erase any patch data at the given index.
-     */
-    auto erase(Index index)
-    {
-        return patches.erase(index);
-    }
-
-    /**
-     * Merge data into the database at index, with the given weighting factor.
-     * Setting rk_factor=0.0 corresponds to overwriting the existing data.
-     *
-     * An exception is throws if a patch does not already exist at the given patch
-     * index. Use insert to create a new patch.
-     */
-    void commit(Index index, Array data, double rk_factor=0.0)
-    {
-        if (location(index) != MeshLocation::cell)
-        {
-            throw std::invalid_argument("Can only commit cell data (for now)");
-        }
-
-        auto target = patches.at(index);
-
-        if (rk_factor == 0.0)
-        {
-            target = data;
-        }
-        else
-        {
-            auto average = ufunc::from([c=rk_factor] (double a, double b)
-            {
-                return a * (1 - c) + b * c;
-            });
-            target = average(data, target);            
-        }
-    }
-
-    /**
-     * Return a deep copy of the data at the patch index, padded with the
-     * given number of guard zones. If no data exists at that index, or the
-     * data has the wrong size, an exception is thrown.
-     */
-    Array checkout(Index index, int guard=0) const
-    {
-        if (location(index) != MeshLocation::cell)
-        {
-            throw std::invalid_argument("Can only checkout cell data (for now)");
-        }
-
-        auto _     = nd::axis::all();
-        auto ng    = guard;
-        auto shape = std::array<int, 3>{ni + 2 * ng, nj + 2 * ng, 5};
-        auto res   = nd::array<double, 3>(shape);
-
-        auto i = std::get<0>(index);
-        auto j = std::get<1>(index);
-        auto p = std::get<2>(index);
-        auto f = std::get<3>(index);
-
-        auto Ri = std::make_tuple(i + 1, j, p, f);
-        auto Li = std::make_tuple(i - 1, j, p, f);
-        auto Rj = std::make_tuple(i, j + 1, p, f);
-        auto Lj = std::make_tuple(i, j - 1, p, f);
-
-        res.select(_|ng|ni+ng, _|ng|nj+ng, _) = patches.at(index);
-
-        res.select(_|ni+ng|ni+2*ng, _|ng|nj+ng, _) = locate(Ri).select(_|0|ng, _, _);
-        res.select(_|ng|ni+ng, _|nj+ng|nj+2*ng, _) = locate(Rj).select(_, _|0|ng, _);
-
-        res.select(_|0|ng, _|ng|nj+ng, _) = locate(Li).select(_|ni-ng|ni, _, _);
-        res.select(_|ng|ni+ng, _|0|ng, _) = locate(Lj).select(_, _|nj-ng|nj, _);
-
-        return res;
-    }
-
-    std::map<Index, Array> all(Field which) const
-    {
-        auto res = std::map<Index, Array>();
-
-        for (const auto& patch : patches)
-        {
-            if (std::get<3>(patch.first) == which)
-            {
-                res.insert(patch);
-            }
-        }
-        return res;
-    }
-
-    auto begin() const
-    {
-        return patches.begin();
-    }
-
-    auto end() const
-    {
-        return patches.end();
-    }
-
-    auto size() const
-    {
-        return patches.size();
-    }
-
-    std::size_t num_cells() const
-    {
-        return size() * ni * nj;
-    }
-
-private:
-    // ========================================================================
-    Array check_shape(Array& array, Index index) const
-    {
-        if (array.shape() != expected_shape(index))
-        {
-            throw std::invalid_argument("input patch data has the wrong shape");
-        }
-        return array;
-    }
-
-    std::array<int, 3> expected_shape(Index index) const
-    {
-        switch (location(index))
-        {
-            case MeshLocation::cell: return {ni + 0, nj + 0, num_fields(index)};
-            case MeshLocation::vert: return {ni + 1, nj + 1, num_fields(index)};
-        }
-    }
-
-    Index coarsen(Index index) const
-    {
-        std::get<0>(index) /= 2;
-        std::get<1>(index) /= 2;
-        std::get<2>(index) -= 1;
-        return index;
-    }
-
-    std::array<Index, 4> refine(Index index) const
-    {
-        auto i = std::get<0>(index);
-        auto j = std::get<1>(index);
-        auto p = std::get<2>(index);
-        auto f = std::get<3>(index);
-
-        return {
-            std::make_tuple(i * 2 + 0, j * 2 + 0, p + 1, f),
-            std::make_tuple(i * 2 + 0, j * 2 + 1, p + 1, f),
-            std::make_tuple(i * 2 + 1, j * 2 + 0, p + 1, f),
-            std::make_tuple(i * 2 + 1, j * 2 + 1, p + 1, f),
-        };
-    }
-
-    int num_fields(Index index) const
-    {
-        return header.at(std::get<3>(index)).num_fields;
-    }
-
-    MeshLocation location(Index index) const
-    {
-        return header.at(std::get<3>(index)).location;
-    }
-
-    nd::array<double, 3> locate(Index index) const
-    {
-        if (patches.count(index))
-        {
-            return patches.at(index);
-        }
-
-        if (patches.count(coarsen(index)))
-        {
-            auto i = std::get<0>(index);
-            auto j = std::get<1>(index);
-            return prolongation(quadrant(patches.at(coarsen(index)), i % 2, j % 2));
-        }
-
-        if (contains_all(refine(index)))
-        {
-            return restriction(tile(refine(index)));
-        }
-
-        // Return a value based on some physical boundary conditions
-
-        auto _ = nd::axis::all();
-        auto res = nd::array<double, 3>(ni, nj, num_fields(index));
-
-        res.select(_, _, 0) = 0.1;
-        res.select(_, _, 1) = 0.0;
-        res.select(_, _, 2) = 0.0;
-        res.select(_, _, 3) = 0.0;
-        res.select(_, _, 4) = 0.125;
-
-        return res;
-    }
-
-    template <typename IndexContainer>
-    bool contains_all(IndexContainer indexes) const
-    {
-        for (auto index : indexes)
-        {
-            if (patches.count(index) == 0)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    nd::array<double, 3> quadrant(const nd::array<double, 3>& A, int I, int J) const
-    {
-        auto _ = nd::axis::all();
-
-        if (I == 0 && J == 0) return A.select(_|0 |ni/2, _|0 |nj/2, _);
-        if (I == 0 && J == 1) return A.select(_|0 |ni/2, _|nj/2|nj, _);
-        if (I == 1 && J == 0) return A.select(_|ni/2|ni, _|0 |nj/2, _);
-        if (I == 1 && J == 1) return A.select(_|ni/2|ni, _|nj/2|nj, _);
-
-        throw std::invalid_argument("quadrant: I and J must be 0 or 1");
-    }
-
-    nd::array<double, 3> tile(std::array<Index, 4> indexes) const
-    {
-        auto _ = nd::axis::all();
-        nd::array<double, 3> res(ni * 2, nj * 2, num_fields(indexes[0]));
-
-        res.select(_|0 |ni*1, _|0 |nj*1, _) = patches.at(indexes[0]);
-        res.select(_|0 |ni*1, _|nj|nj*2, _) = patches.at(indexes[1]);
-        res.select(_|ni|ni*2, _|0 |nj*1, _) = patches.at(indexes[2]);
-        res.select(_|ni|ni*2, _|nj|nj*2, _) = patches.at(indexes[3]);
-
-        return res;
-    }
-
-    nd::array<double, 3> prolongation(const nd::array<double, 3>& A) const
-    {
-        auto _ = nd::axis::all();
-        nd::array<double, 3> res(ni, nj, A.shape(2));
-
-        res.select(_|0|ni|2, _|0|nj|2, _) = A;
-        res.select(_|0|ni|2, _|1|nj|2, _) = A;
-        res.select(_|1|ni|2, _|0|nj|2, _) = A;
-        res.select(_|1|ni|2, _|1|nj|2, _) = A;
-
-        return res;
-    }
-
-    nd::array<double, 3> restriction(const nd::array<double, 3>& A) const
-    {
-        auto _ = nd::axis::all();
-        auto mi = A.shape(0);
-        auto mj = A.shape(1);
-
-        auto B = std::array<nd::array<double, 3>, 4>
-        {
-            A.select(_|0|mi|2, _|0|mj|2, _),
-            A.select(_|0|mi|2, _|1|mj|2, _),
-            A.select(_|1|mi|2, _|0|mj|2, _),
-            A.select(_|1|mi|2, _|1|mj|2, _),
-        };
-
-        auto average = ufunc::nfrom([] (std::array<double, 4> b)
-        {
-            return (b[0] + b[1] + b[2] + b[3]) * 0.25;
-        });
-        return average(B);
-    }
-
-    // ========================================================================
-    int ni;
-    int nj;
-    Header header;
-    std::map<Index, Array> patches;
-};
-
-
-
-
-// ============================================================================
 void write_database(const Database& database)
 {
     auto parts = std::vector<std::string>{"data", "chkpt.0000.bt"};
@@ -509,7 +159,8 @@ void run_config::print(std::ostream& os) const
     using std::showpos;
     const int W = 24;
 
-    os << "\n" << std::string(52, '=') << "\n";
+    os << std::string(52, '=') << "\n";
+    os << "Config:\n\n";
 
     std::ios orig(nullptr);
     orig.copyfmt(os);
@@ -519,7 +170,7 @@ void run_config::print(std::ostream& os) const
         os << left << setw(W) << setfill('.') << name + " " << " " << value << "\n";
     });
 
-    os << std::string(52, '=') << "\n\n";
+    os << "\n";
     os.copyfmt(orig);
 }
 
@@ -764,11 +415,6 @@ Database build_database(int ni, int nj)
         }
     }
 
-    for (const auto& patch : database.all(Field::vert_coords))
-    {
-        std::cout << to_string(patch.first) << std::endl;
-    }
-
     // [0      ] [1      ] [2      ]
     // [0   1  ] [2   3  ] [4   5  ]
     // [0 1 2 3] [4 5 6 7] [8 9 a b]
@@ -782,8 +428,6 @@ Database build_database(int ni, int nj)
 int main_2d(int argc, const char* argv[])
 {
     auto cfg = run_config::from_argv(argc, argv);
-    cfg.print(std::cout);
-
     auto wall = 0.0;
     auto ni   = cfg.ni;
     auto nj   = cfg.nj;
@@ -795,6 +439,12 @@ int main_2d(int argc, const char* argv[])
     auto database = build_database(ni, nj);
 
 
+    // ========================================================================
+    std::cout << "\n";
+    cfg.print(std::cout);
+    database.print(std::cout);
+    std::cout << std::string(52, '=') << "\n";
+    std::cout << "Main loop:\n\n";
 
 
     // ========================================================================
@@ -808,12 +458,12 @@ int main_2d(int argc, const char* argv[])
         t    += dt;
         iter += 1;
         wall += timer.seconds();
-        auto kzps = database.num_cells() / 1e3 / timer.seconds();
+        auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
 
         std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, kzps);
     }
 
-    std::printf("average kzps=%f\n", database.num_cells() / 1e3 / wall * iter);
+    std::printf("average kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / wall * iter);
     write_database(database);
 
     return 0;
